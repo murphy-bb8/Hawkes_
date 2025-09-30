@@ -1,4 +1,4 @@
-# 使用 Hawkes 过程进行订单流建模：毒性识别与价格冲击预测
+# 应用 Hawkes 过程对于订单流建模：毒性识别与价格冲击预测
 
 本项目实现了基于指数核的多维 Hawkes 过程，用于高频订单流建模；提供泊松过程基线、Ogata 薄化仿真、最大似然估计（MLE）、可视化与模型比较，并给出“毒性”市价单识别与短期价格冲击的简易度量。
 
@@ -11,24 +11,34 @@ pip install -r requirements.txt
 ## 目录结构
 
 - `workflow/`：按环节组织的代码包
-  - `models/`：模型
+  - `models/`
     - `hawkes.py`：多维 Hawkes（指数核），仿真/似然/残差/强度
-  - `fit/`：参数估计
-    - `mle.py`：Hawkes 指数核的投影梯度 MLE
-  - `baselines/`：基线模型
+    - `legacy.py`：简化版单变量 Hawkes（入门/对照）
+  - `fit/`
+    - `mle.py`：投影梯度 MLE（非负约束、min_beta、谱半径投影 rho_max、可选 L2）
+    - `map_em.py`：MAP-EM（Gamma 先验，支持 min_beta，默认不更新 beta）
+  - `baselines/`
     - `poisson.py`：均匀泊松过程与率 MLE
-  - `eval/`：模型比较
+  - `eval/`
     - `compare.py`：Hawkes vs Poisson 的 AIC/似然
-  - `viz/`：可视化
-    - `plots.py`：事件栅格、强度曲线、残差直方图（中文友好）
-  - `io/`：数据读写
+  - `viz/`
+    - `plots.py`：事件栅格、强度曲线、残差直方图
+    - `graph.py`：稀疏传染图（Alpha 热力图，支持阈值显示）
+  - `gof/`
+    - `tests.py`：KS(Exp/Uniform)、Ljung–Box/ACF、Uniform 变换
+    - `plots.py`：QQ-plot 与直方图
+  - `preprocess/`
+    - `jitter.py`：时间戳抖动（1e-6，消除同刻堆叠）
+    - `seasonal.py`：分段常数基线初值估计（吸收盘中季节性）
+  - `io/`
     - `events.py`：事件 JSON 读写
-  - `tuning/`：调参与稳定性
+  - `tuning/`
     - `runner.py`：多随机种子的仿真-拟合-比较-谱半径
-  - `analytics/`：交易分析
+    - `grid.py`：min_beta / l2_alpha / rho_max 的网格搜索（AIC+残差指标）
+  - `analytics/`
     - `toxicity.py`：市价单“毒性”评分与短期价格冲击代理
-  - `tick_integration/`：tick 可选适配
-    - `adapter.py`：使用 tick.hawkes 的拟合接口（未安装会跳过）
+  - `tick_integration/`
+    - `adapter.py`：tick.hawkes 的拟合接口（自动回退与清洗）
 - `main.py`：命令行入口（仿真/拟合/保存加载）
 
 ## 快速开始
@@ -120,10 +130,35 @@ python main.py gof --dim 1 --T 30 --input events.json --method mle --jitter --se
 
 ## 方法说明
 
-- 仿真：Ogata 薄化；
-- 似然：指数核的闭式积分；
-- 估计：投影梯度上升（非负约束）；
-- 诊断：时间重标定残差应近似 Exp(1)。
+- **过程与核**：指数核 Hawkes 过程，强度函数为：
+  ```
+  λᵢ(t) = μᵢ + Σⱼ Σₖ αᵢⱼ e^(-βᵢⱼ(t-tₖʲ))
+  ```
+  其中 μᵢ 为基线强度，αᵢⱼ 为激励强度，βᵢⱼ 为衰减参数。
+
+- **仿真**：Ogata 薄化算法（自适应上界），时间复杂度接近 O(n)。
+
+- **似然计算**：指数核的闭式对数似然与积分项，避免 O(n²) 逐对累加带来的数值下溢。
+
+- **稳定性约束**：
+  - 硬约束：β ≥ min_beta、谱半径投影 ρ(α/β) ≤ rho_max
+  - 可选软约束：对 α 加 L2 正则化抑制过大分枝比（提升可解释性）
+
+- **参数估计**：
+  - **MLE**：投影梯度上升（步长可调、支持小步长+高迭代），对多维/多日可并行
+  - **MAP-EM**：Gamma 先验（μ, α, β），E 步计算父子责任、M 步闭式更新（默认固定 β）
+
+- **残差与拟合优度**：时间重标定残差 ΔΛ，进行 KS(Exp/Uniform) 与 Ljung–Box 检验；QQ/直方图核对 Exp(1) 分布。
+- **季节性处理**：分段常数基线初值（`--seasonal_bins`）与时间戳抖动（`--jitter`）吸收盘中 U 型等模式。
+
+- **稀疏传染图**：`--adj_threshold` 直观展示谁激励谁，结合 tick 的 L1 正则化可做对照。
+
+## 扩展方向
+
+- **稳定性保证**：`alpha/beta` 的谱半径 < 1 确保过程稳定
+- **多维建模**：维度可映射买/卖/不同事件类型，支持跨类型激励分析
+- **核函数扩展**：可替换为双指数、幂律等核函数，避免将长记忆误判为短记忆
+- **外生因子**：加入价格过程、成交量等外生变量进行联立建模
 
 ## 备注
 
