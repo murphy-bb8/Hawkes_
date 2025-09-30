@@ -157,3 +157,13 @@ tmp/
 *.pkl
 *.h5
 *.hdf5
+
+# Allow tracked figures used in README
+!docs/img/fit_adjacency.png
+!docs/img/fit_intensity.png
+!docs/img/fit_raster.png
+!docs/img/fit_residuals.png
+!docs/img/gof_hist.png
+!docs/img/gof_qq.png
+!docs/img/sim_intensity.png
+!docs/img/sim_raster.png

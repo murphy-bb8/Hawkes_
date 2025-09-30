@@ -116,17 +116,17 @@ python .\main.py gof --dim 1 --T 30 --input .\events.json --method mle \
 ```
 
 #### 事件栅格与强度轨迹
-![事件栅格](fit_raster.png)
+![事件栅格](docs/img/fit_raster.png)
 
-![强度轨迹](fit_intensity.png)
+![强度轨迹](docs/img/fit_intensity.png)
 
 #### 残差分析
-![残差直方图](fit_residuals.png)
+![残差直方图](docs/img/fit_residuals.png)
 
 #### 拟合优度检验
-![GOF 直方图 vs Exp(1)](gof_hist.png)
+![GOF 直方图 vs Exp(1)](docs/img/gof_hist.png)
 
-![GOF QQ-plot 对 Exp(1)](gof_qq.png)
+![GOF QQ-plot 对 Exp(1)](docs/img/gof_qq.png)
 
 
 ## 毒性识别与价格冲击（暂定）
