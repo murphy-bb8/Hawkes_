@@ -77,8 +77,37 @@ python main.py gof --dim 1 --T 30 --input events.json --method mle --jitter --se
 - --jitter 会对秒/毫秒时间戳加 1e-6 抖动，消除同刻堆叠；
 - --seasonal_bins>0 会用分段常数估计基线初值，吸收盘中季节性（U 型/收盘拥堵）。
 
+## 初次实验结果（单维示例，T=30，n≈70）
 
-## 毒性识别与价格冲击
+- 参数估计（MLE，稳定化）：
+  - mu ≈ 0.7402，alpha ≈ 0.8616，beta ≈ 1.2366，分枝比 G ≈ 0.70 < 1（稳定）
+  - 对数似然 loglik ≈ 7.2776
+  - AIC（Hawkes）≈ -8.5553，对比 Poisson AIC ≈ 23.3783（显著更优）
+- 三件套 GOF（残差补偿检验）：
+  - KS-Exp: D ≈ 0.0913，p ≈ 0.5721（不过度拒绝）
+  - KS-Uniform: D ≈ 0.0913，p ≈ 0.5721（不过度拒绝）
+  - Ljung–Box(20): Q ≈ 16.124，p ≈ 0.7089（无显著自相关）
+- 结论：
+  - 模型在该数据上拟合良好，较泊松基线有显著性能提升，残差分布与独立性检验均通过。
+
+### 可视化（示例输出）
+
+下图由 `python .\main.py fit --dim 1 --T 30 --input .\events.json --plot --no_show --method mle --max_iter 3000 --step_mu 5e-3 --step_alpha 5e-3 --step_beta 1e-4 --min_beta 0.4 --rho_max 0.85 --adj_threshold 0.0` 与 `python .\main.py gof --dim 1 --T 30 --input .\events.json --method mle --jitter --seasonal_bins 10` 自动生成（文件位于项目根目录）：
+
+![事件栅格](fit_raster.png)
+
+![强度轨迹](fit_intensity.png)
+
+![残差直方图](fit_residuals.png)
+
+![GOF 直方图 vs Exp(1)](gof_hist.png)
+
+![GOF QQ-plot 对 Exp(1)](gof_qq.png)
+
+注：若进行多维拆分（如买/卖、涨/跌），图像会同时展示多通道结果；建议结合 `--adj_threshold` 查看稀疏传染结构（热力图已单独生成为 `fit_adjacency.png`）。
+
+
+## 毒性识别与价格冲击（暂定）
 
 `analytics.py` 提供：
 - 毒性分数：短期窗口内由该笔市价单引发的期望“子事件”增量的近似值；
@@ -101,3 +130,5 @@ python main.py gof --dim 1 --T 30 --input events.json --method mle --jitter --se
 - 稳定性：`alpha/beta` 的谱半径<1；
 - 多维：维度可映射买/卖/不同事件类型；
 - 可扩展：替换核函数、加入外生因子或价格过程联立建模。
+- 扩展基线建模：当前模型的基线强度（μ）是常数，可尝试使用时间依赖基线（例如：分段常数基线、线性基线或样条基线）来考虑不同时间段内市场的不同交易节奏。
+- 互激励建模：目前模型使用的是**单变量 Hawkes 过程**，适用于单一事件序列。如果希望捕捉不同事件（例如买单、卖单、价跃升等）之间的互激励效应，可以扩展为 **多变量 Hawkes 过程**。在多维 Hawkes 模型中，每个维度之间的激励（αij）参数可以帮助了解一个事件如何通过其激励其他类型的事件。

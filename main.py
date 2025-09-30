@@ -4,7 +4,7 @@ import numpy as np
 from workflow.models.hawkes import HawkesExponential
 from workflow.fit import fit_hawkes_exponential, map_em_exponential
 from workflow.eval import compare_hawkes_poisson
-from workflow.viz import plot_event_raster, plot_intensity, plot_residuals
+from workflow.viz import plot_event_raster, plot_intensity, plot_residuals, plot_adjacency_heatmap
 from workflow.io import save_events_json, load_events_json
 from workflow.tuning.grid import grid_search
 from workflow.gof import ks_exp_test, ks_uniform_test, ljung_box_test, compute_uniform_from_residuals
@@ -119,12 +119,14 @@ def run_fit(args: argparse.Namespace):
             plot_intensity(grid, intens, title="拟合强度轨迹", savepath="fit_intensity.png")
             resids = est_model.compensate_residuals(events, args.T)
             plot_residuals(resids, savepath="fit_residuals.png")
-            print("图像已保存为 fit_raster.png, fit_intensity.png, fit_residuals.png")
+            plot_adjacency_heatmap(est_model.alpha, threshold=getattr(args, 'adj_threshold', 0.0), savepath="fit_adjacency.png")
+            print("图像已保存为 fit_raster.png, fit_intensity.png, fit_residuals.png, fit_adjacency.png")
         else:
             plot_event_raster(events, dim=args.dim, T=args.T, title="事件与拟合模型")
             plot_intensity(grid, intens, title="拟合强度轨迹")
             resids = est_model.compensate_residuals(events, args.T)
             plot_residuals(resids)
+            plot_adjacency_heatmap(est_model.alpha, threshold=getattr(args, 'adj_threshold', 0.0))
 
 
 def main():
@@ -165,6 +167,7 @@ def main():
     p_fit.add_argument("--min_beta", type=float, default=0.1)
     p_fit.add_argument("--l2_alpha", type=float, default=0.0)
     p_fit.add_argument("--rho_max", type=float, default=0.95, help="分枝比上限（谱半径阈值）")
+    p_fit.add_argument("--adj_threshold", type=float, default=0.0, help="稀疏传染图阈值（小于阈值置0）")
     # MAP-EM 先验与选项
     p_fit.add_argument("--prior_mu_a", type=float, default=1.0)
     p_fit.add_argument("--prior_mu_b", type=float, default=1.0)
