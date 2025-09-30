@@ -2,7 +2,7 @@ import argparse
 import numpy as np
 
 from workflow.models.hawkes import HawkesExponential
-from workflow.fit import fit_hawkes_exponential
+from workflow.fit import fit_hawkes_exponential, map_em_exponential
 from workflow.eval import compare_hawkes_poisson
 from workflow.viz import plot_event_raster, plot_intensity, plot_residuals
 from workflow.io import save_events_json, load_events_json
@@ -53,27 +53,54 @@ def run_fit(args: argparse.Namespace):
         true_model = HawkesExponential(np.full(args.dim, args.mu), np.full((args.dim, args.dim), args.alpha), np.full((args.dim, args.dim), args.beta))
     else:
         events, true_model = run_simulate(args)
-    fit = fit_hawkes_exponential(
-        events,
-        T=args.T,
-        dim=args.dim,
-        max_iter=args.max_iter,
-        step_mu=args.step_mu,
-        step_alpha=args.step_alpha,
-        step_beta=args.step_beta,
-        min_beta=args.min_beta,
-        l2_alpha=args.l2_alpha,
-        rho_max=args.rho_max,
-    )
-    est_model = HawkesExponential(fit.mu, fit.alpha, fit.beta)
-    print("拟合结果:")
-    print("mu=", fit.mu)
-    print("alpha=\n", fit.alpha)
-    print("beta=\n", fit.beta)
-    print("loglik=", fit.loglik, "converged=", fit.converged, "iters=", fit.n_iter)
+    if args.method == "map_em":
+        res = map_em_exponential(
+            events,
+            T=args.T,
+            dim=args.dim,
+            init_mu=None,
+            init_alpha=None,
+            init_beta=None,
+            max_iter=args.max_iter,
+            min_beta=args.min_beta,
+            prior_mu_a=args.prior_mu_a,
+            prior_mu_b=args.prior_mu_b,
+            prior_alpha_a=args.prior_alpha_a,
+            prior_alpha_b=args.prior_alpha_b,
+            prior_beta_a=args.prior_beta_a,
+            prior_beta_b=args.prior_beta_b,
+            update_beta=args.update_beta,
+        )
+        mu, alpha, beta = res.mu, res.alpha, res.beta
+        est_model = HawkesExponential(mu, alpha, beta)
+        print("MAP-EM 拟合结果:")
+        print("mu=", mu)
+        print("alpha=\n", alpha)
+        print("beta=\n", beta)
+        print("loglik=", res.loglik, "iters=", res.n_iter)
+        comp = compare_hawkes_poisson(events, args.T, mu, alpha, beta)
+    else:
+        fit = fit_hawkes_exponential(
+            events,
+            T=args.T,
+            dim=args.dim,
+            max_iter=args.max_iter,
+            step_mu=args.step_mu,
+            step_alpha=args.step_alpha,
+            step_beta=args.step_beta,
+            min_beta=args.min_beta,
+            l2_alpha=args.l2_alpha,
+            rho_max=args.rho_max,
+        )
+        est_model = HawkesExponential(fit.mu, fit.alpha, fit.beta)
+        print("MLE 拟合结果:")
+        print("mu=", fit.mu)
+        print("alpha=\n", fit.alpha)
+        print("beta=\n", fit.beta)
+        print("loglik=", fit.loglik, "converged=", fit.converged, "iters=", fit.n_iter)
+        comp = compare_hawkes_poisson(events, args.T, fit.mu, fit.alpha, fit.beta)
 
     # compare with Poisson baseline
-    comp = compare_hawkes_poisson(events, args.T, fit.mu, fit.alpha, fit.beta)
     print("模型比较(AIC):", comp)
 
     # 先保存，再绘图（避免阻塞）
@@ -125,6 +152,7 @@ def main():
     p_fit.add_argument("--plot", action="store_true")
     p_fit.add_argument("--no_show", action="store_true", help="仅保存图片，不显示交互窗口")
     p_fit.add_argument("--input", type=str, default=None, help="从JSON载入事件")
+    p_fit.add_argument("--method", type=str, default="mle", choices=["mle", "map_em"], help="拟合方法")
     p_fit.add_argument("--out", type=str, default=None, help="保存事件到JSON")
     # 稳定性相关可调参数
     p_fit.add_argument("--max_iter", type=int, default=600)
@@ -134,6 +162,14 @@ def main():
     p_fit.add_argument("--min_beta", type=float, default=0.1)
     p_fit.add_argument("--l2_alpha", type=float, default=0.0)
     p_fit.add_argument("--rho_max", type=float, default=0.95, help="分枝比上限（谱半径阈值）")
+    # MAP-EM 先验与选项
+    p_fit.add_argument("--prior_mu_a", type=float, default=1.0)
+    p_fit.add_argument("--prior_mu_b", type=float, default=1.0)
+    p_fit.add_argument("--prior_alpha_a", type=float, default=1.0)
+    p_fit.add_argument("--prior_alpha_b", type=float, default=1.0)
+    p_fit.add_argument("--prior_beta_a", type=float, default=1.0)
+    p_fit.add_argument("--prior_beta_b", type=float, default=1.0)
+    p_fit.add_argument("--update_beta", action="store_true", help="MAP-EM 中是否更新 beta（默认不更新）")
     p_fit.set_defaults(func=run_fit)
 
     # tune 子命令：在已有或仿真数据上做网格搜索

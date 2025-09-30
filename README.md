@@ -33,20 +33,25 @@ pip install -r requirements.txt
 
 ## 快速开始
 
-仿真 1 维 Hawkes 并可视化：
+仿真（保存JSON与图片，不弹窗）：
 
 ```bash
-python main.py simulate --dim 1 --T 10 --mu 0.2 --alpha 0.5 --beta 1.5 --plot --out data_sim.json
+python main.py simulate --dim 1 --T 30 --mu 0.6 --alpha 0.7 --beta 1.2 --plot --no_show --min_events 60 --max_retries 80 --out events.json
 ```
 
-从文件加载或先仿真，再用 MLE 拟合参数，并与泊松基线比较：
+MLE 或 MAP-EM 拟合，并与泊松基线比较：
 
 ```bash
-# 直接仿真并拟合
-python main.py fit --dim 1 --T 10 --mu 0.2 --alpha 0.5 --beta 1.5 --plot
+# 稳定化 MLE
+python main.py fit --dim 1 --T 30 --input events.json --plot --no_show \
+  --method mle --max_iter 3000 --step_mu 5e-3 --step_alpha 5e-3 --step_beta 1e-4 \
+  --min_beta 0.4 --rho_max 0.85
 
-# 从已有JSON加载事件再拟合
-python main.py fit --dim 1 --T 10 --mu 0.2 --alpha 0.5 --beta 1.5 --input data_sim.json --plot
+# MAP-EM（带先验）
+python main.py fit --dim 1 --T 30 --input events.json --plot --no_show \
+  --method map_em --max_iter 500 --min_beta 0.4 \
+  --prior_mu_a 1.0 --prior_mu_b 1.0 --prior_alpha_a 1.0 --prior_alpha_b 1.0 \
+  --prior_beta_a 2.0 --prior_beta_b 2.0
 ```
 
 ## 调参与稳定性（tuning）
@@ -55,7 +60,7 @@ python main.py fit --dim 1 --T 10 --mu 0.2 --alpha 0.5 --beta 1.5 --input data_s
 
 ```python
 from workflow.tuning import simulate_and_tune
-report = simulate_and_tune(dim=1, T=10.0, seeds=(1,2,3), mu=0.2, alpha=0.5, beta=1.5)
+report = simulate_and_tune(dim=1, T=30.0, seeds=(1,2,3), mu=0.6, alpha=0.7, beta=1.2)
 print(report)
 ```
 
