@@ -76,7 +76,7 @@ python main.py gof --dim 1 --T 30 --input events.json --method mle --jitter --se
 说明：
 - --jitter 会对秒/毫秒时间戳加 1e-6 抖动，消除同刻堆叠；
 - --seasonal_bins>0 会用分段常数估计基线初值，吸收盘中季节性（U 型/收盘拥堵）。
-```
+
 
 ## 毒性识别与价格冲击
 
