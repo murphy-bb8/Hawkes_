@@ -7,6 +7,9 @@ from workflow.eval import compare_hawkes_poisson
 from workflow.viz import plot_event_raster, plot_intensity, plot_residuals
 from workflow.io import save_events_json, load_events_json
 from workflow.tuning.grid import grid_search
+from workflow.gof import ks_exp_test, ks_uniform_test, ljung_box_test, compute_uniform_from_residuals
+from workflow.gof import plot_gof_hist, plot_gof_qq
+from workflow.preprocess import add_jitter_to_events, estimate_piecewise_mu
 
 
 def run_simulate(args: argparse.Namespace):
@@ -218,6 +221,71 @@ def main():
         return report
 
     p_tune.set_defaults(func=run_tune)
+
+    # gof 子命令：做三件套 GOF 检验并出图
+    p_gof = sub.add_parser("gof", help="对拟合残差做KS(Exp/Uniform)+Ljung-Box，并绘制QQ/直方图")
+    p_gof.add_argument("--dim", type=int, default=1)
+    p_gof.add_argument("--T", type=float, default=30.0)
+    p_gof.add_argument("--input", type=str, required=True, help="事件JSON")
+    p_gof.add_argument("--method", type=str, default="mle", choices=["mle", "map_em"])
+    p_gof.add_argument("--jitter", action="store_true", help="对时间戳加微抖动")
+    p_gof.add_argument("--seasonal_bins", type=int, default=0, help=">0 则用分段常数基线估计 mu 初值")
+    p_gof.add_argument("--max_iter", type=int, default=2000)
+    p_gof.add_argument("--step_mu", type=float, default=5e-3)
+    p_gof.add_argument("--step_alpha", type=float, default=5e-3)
+    p_gof.add_argument("--step_beta", type=float, default=1e-4)
+    p_gof.add_argument("--min_beta", type=float, default=0.4)
+    p_gof.add_argument("--rho_max", type=float, default=0.85)
+    p_gof.add_argument("--prior_mu_a", type=float, default=1.0)
+    p_gof.add_argument("--prior_mu_b", type=float, default=1.0)
+    p_gof.add_argument("--prior_alpha_a", type=float, default=1.0)
+    p_gof.add_argument("--prior_alpha_b", type=float, default=1.0)
+    p_gof.add_argument("--prior_beta_a", type=float, default=2.0)
+    p_gof.add_argument("--prior_beta_b", type=float, default=2.0)
+
+    def run_gof(args: argparse.Namespace):
+        events = load_events_json(args.input)
+        if args.jitter:
+            events = add_jitter_to_events(events, eps=1e-6)
+        if args.seasonal_bins and args.seasonal_bins > 0:
+            mu0 = estimate_piecewise_mu(events, args.T, args.dim, bins=args.seasonal_bins)
+        else:
+            mu0 = None
+        # 拟合
+        if args.method == 'map_em':
+            res = map_em_exponential(
+                events, T=args.T, dim=args.dim, init_mu=mu0,
+                max_iter=args.max_iter, min_beta=args.min_beta,
+                prior_mu_a=args.prior_mu_a, prior_mu_b=args.prior_mu_b,
+                prior_alpha_a=args.prior_alpha_a, prior_alpha_b=args.prior_alpha_b,
+                prior_beta_a=args.prior_beta_a, prior_beta_b=args.prior_beta_b,
+            )
+            mu, alpha, beta = res.mu, res.alpha, res.beta
+        else:
+            fit = fit_hawkes_exponential(
+                events, T=args.T, dim=args.dim, max_iter=args.max_iter,
+                step_mu=args.step_mu, step_alpha=args.step_alpha, step_beta=args.step_beta,
+                min_beta=args.min_beta, l2_alpha=0.0, rho_max=args.rho_max,
+            )
+            mu, alpha, beta = fit.mu, fit.alpha, fit.beta
+        model = HawkesExponential(mu, alpha, beta)
+        # 残差与GOF
+        resids = model.compensate_residuals(events, args.T)
+        ks_exp = ks_exp_test(resids)
+        u = compute_uniform_from_residuals(resids)
+        ks_uni = ks_uniform_test(u)
+        lb = ljung_box_test(u, lags=20)
+        print({
+            'n': len(resids),
+            'KS_Exp': ks_exp,
+            'KS_Uni': ks_uni,
+            'LB': lb,
+        })
+        # 绘图
+        plot_gof_hist(resids, savepath='gof_hist.png')
+        plot_gof_qq(resids, savepath='gof_qq.png')
+
+    p_gof.set_defaults(func=run_gof)
 
     args = parser.parse_args()
     args.func(args)

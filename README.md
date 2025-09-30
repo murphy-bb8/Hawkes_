@@ -62,6 +62,20 @@ python main.py fit --dim 1 --T 30 --input events.json --plot --no_show \
 from workflow.tuning import simulate_and_tune
 report = simulate_and_tune(dim=1, T=30.0, seeds=(1,2,3), mu=0.6, alpha=0.7, beta=1.2)
 print(report)
+
+## 拟合优度（三件套）
+
+- KS 对 Exp(1)、KS 对 Uniform（对 U=1-exp(-ΔΛ)）与 Ljung–Box/ACF 自相关检验
+- p 值 >= 0.05 视为“不过度拒绝”（可用 0.01 为强标准）
+- 输出：样本量 n、KS_Exp D/p、KS_Uni D/p、LB Q/p；并保存 QQ-plot 与直方图
+
+```bash
+python main.py gof --dim 1 --T 30 --input events.json --method mle --jitter --seasonal_bins 10
+```
+
+说明：
+- --jitter 会对秒/毫秒时间戳加 1e-6 抖动，消除同刻堆叠；
+- --seasonal_bins>0 会用分段常数估计基线初值，吸收盘中季节性（U 型/收盘拥堵）。
 ```
 
 ## 毒性识别与价格冲击
