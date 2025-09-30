@@ -102,19 +102,31 @@ python main.py gof --dim 1 --T 30 --input events.json --method mle --jitter --se
 
 ### 可视化（示例输出）
 
-下图由 `python .\main.py fit --dim 1 --T 30 --input .\events.json --plot --no_show --method mle --max_iter 3000 --step_mu 5e-3 --step_alpha 5e-3 --step_beta 1e-4 --min_beta 0.4 --rho_max 0.85 --adj_threshold 0.0` 与 `python .\main.py gof --dim 1 --T 30 --input .\events.json --method mle --jitter --seasonal_bins 10` 自动生成（文件位于项目根目录）：
+下图由以下命令自动生成（文件位于项目根目录）：
 
+```bash
+# 拟合与可视化
+python .\main.py fit --dim 1 --T 30 --input .\events.json --plot --no_show \
+  --method mle --max_iter 3000 --step_mu 5e-3 --step_alpha 5e-3 --step_beta 1e-4 \
+  --min_beta 0.4 --rho_max 0.85 --adj_threshold 0.0
+
+# 拟合优度检验
+python .\main.py gof --dim 1 --T 30 --input .\events.json --method mle \
+  --jitter --seasonal_bins 10
+```
+
+#### 事件栅格与强度轨迹
 ![事件栅格](fit_raster.png)
 
 ![强度轨迹](fit_intensity.png)
 
+#### 残差分析
 ![残差直方图](fit_residuals.png)
 
+#### 拟合优度检验
 ![GOF 直方图 vs Exp(1)](gof_hist.png)
 
 ![GOF QQ-plot 对 Exp(1)](gof_qq.png)
-
-注：若进行多维拆分（如买/卖、涨/跌），图像会同时展示多通道结果；建议结合 `--adj_threshold` 查看稀疏传染结构（热力图已单独生成为 `fit_adjacency.png`）。
 
 
 ## 毒性识别与价格冲击（暂定）
