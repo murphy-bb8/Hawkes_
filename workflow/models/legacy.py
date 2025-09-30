@@ -1,93 +1,57 @@
 import numpy as np
 
+
 class MHP:
     def __init__(self, lambda_0, alpha, beta, T):
-        """
-        初始化 MHP 模型
-        :param lambda_0: 背景强度
-        :param alpha: 激励参数
-        :param beta: 衰减参数
-        :param T: 模拟的总时间
-        """
-        self.lambda_0 = lambda_0  # 背景强度
-        self.alpha = alpha  # 激励参数
-        self.beta = beta  # 衰减参数
-        self.T = T  # 模拟时间
-        self.times = []  # 事件发生的时间列表
+        self.lambda_0 = lambda_0
+        self.alpha = alpha
+        self.beta = beta
+        self.T = T
+        self.times = []
 
     def update_intensity(self, t):
-        """
-        根据历史事件更新强度
-        :param t: 当前时间
-        :return: 当前的强度值
-        """
         intensity = self.lambda_0
         for prev_t in self.times:
-            if t > prev_t:  # 确保时间顺序正确
+            if t > prev_t:
                 intensity += self.alpha * np.exp(-self.beta * (t - prev_t))
-        return max(0, intensity)  # 确保强度非负
+        return max(0, intensity)
 
     def simulate(self):
-        """
-        使用 Ogata 改进的薄化算法模拟 Hawkes 过程
-        :return: 事件发生的时间列表
-        """
         t = 0
-        self.times = []  # 重置事件列表
-        
+        self.times = []
         while t < self.T:
-            # 计算当前强度
             current_intensity = self.update_intensity(t)
-            
-            # 生成下一个潜在事件的时间间隔
             if current_intensity > 0:
                 dt = np.random.exponential(1 / current_intensity)
                 t += dt
-                
                 if t >= self.T:
                     break
-                    
-                # 计算新时间点的强度
                 new_intensity = self.update_intensity(t)
-                
-                # Ogata 薄化算法：以概率 new_intensity/current_intensity 接受事件
                 u = np.random.uniform(0, 1)
                 if u <= new_intensity / current_intensity:
                     self.times.append(t)
             else:
-                # 如果强度为0，直接跳到时间T
                 t = self.T
-                
         return self.times
 
     def debug_simulation(self, max_events=1000):
-        """
-        调试版本的模拟，添加详细的输出信息
-        """
         print("开始调试模拟...")
         print(f"参数: lambda_0={self.lambda_0}, alpha={self.alpha}, beta={self.beta}, T={self.T}")
-        
         t = 0
         self.times = []
         event_count = 0
-        
         while t < self.T and event_count < max_events:
             current_intensity = self.update_intensity(t)
             print(f"时间 t={t:.3f}, 当前强度={current_intensity:.3f}, 事件数={len(self.times)}")
-            
             if current_intensity > 0:
                 dt = np.random.exponential(1 / current_intensity)
                 t += dt
-                
                 if t >= self.T:
                     break
-                    
                 new_intensity = self.update_intensity(t)
                 u = np.random.uniform(0, 1)
                 accept_prob = new_intensity / current_intensity if current_intensity > 0 else 0
-                
                 print(f"  新时间 t={t:.3f}, 新强度={new_intensity:.3f}, 接受概率={accept_prob:.3f}, u={u:.3f}")
-                
                 if u <= accept_prob:
                     self.times.append(t)
                     event_count += 1
@@ -97,21 +61,13 @@ class MHP:
             else:
                 print("  强度为0，结束模拟")
                 t = self.T
-                
         print(f"模拟完成，共生成 {len(self.times)} 个事件")
         return self.times
 
     def plot_events(self):
-        """
-        绘制事件时间的直方图
-        """
         import matplotlib.pyplot as plt
-        import matplotlib
-        
-        # 设置中文字体支持
         plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
-        plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
-        
+        plt.rcParams['axes.unicode_minus'] = False
         plt.figure(figsize=(10, 6))
         plt.hist(self.times, bins=50, alpha=0.7, color='g', edgecolor='black')
         plt.xlabel('时间', fontsize=12)
@@ -120,3 +76,5 @@ class MHP:
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.show()
+
+
