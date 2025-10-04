@@ -53,6 +53,8 @@ class HawkesExponential:
         events: List[Tuple[float, int]] = []
         t = 0.0
         S = np.zeros_like(self.alpha)
+        # Precompute conservative upper bound per dim: mu_i + sum_j alpha_ij * N_max
+        # For Bund-scale simulation, adaptively refresh lam_bar using decayed S to tighten bound.
         while t < T and len(events) < max_jumps:
             lam_vec = self.mu + (self.alpha * S).sum(axis=1)
             lam_vec = np.clip(lam_vec, 0.0, np.inf)

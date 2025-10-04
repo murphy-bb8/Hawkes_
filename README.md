@@ -165,6 +165,35 @@ python .\main.py gof --dim 1 --T 30 --input .\events.json --method mle \
 
 - **稀疏传染图**：`--adj_threshold` 直观展示谁激励谁，结合 tick 的 L1 正则化可做对照。
 
+### 外生因子（Cox×Hawkes）
+- 建模：`λ_i(t) = exp(θ_i^T X(t)) + Σ_j α_{ij} e^{-β_{ij}(t-t_k^j)}`，其中 `X(t)` 采用分段常数特征
+- 特征：支持基于事件的 proxy（`flow+`/`flow-`/`rv`），或替换为真实 LOB/行情因子
+- 稳定性：对 `θ^T X` 做裁剪避免指数溢出（logits ∈ [-50,50]），并支持特征标准化（均值-方差）
+- 优化：
+  - θ：Adam（带梯度裁剪、学习率衰减）
+  - θ,α,β 联合：θ 用 Adam，α/β 加非负/下界与谱半径投影（ρ≤rho_max）
+  - 可选 EM：在 θ 固定后对 α 做责任分配更新
+
+CLI（Bund + exo 示例）
+```powershell
+# θ 拟合（标准化 + Adam + 梯度裁剪）
+python .\main.py fit --input bund --dim 4 --T 0 --model cox_hawkes --use_exo --exo_standardize \
+  --exo_window 2.0 --exo_step 1e-3 --lr_decay_exo 1e-4 --grad_clip 10 --exo_max_iter 500 \
+  --plot --no_show --method mle --max_iter 1200 --step_mu 5e-3 --step_alpha 5e-3 --step_beta 2e-4 --min_beta 0.4 --rho_max 0.9
+
+# θ,α,β 联合优化（更稳健参数）
+python .\main.py fit --input bund --dim 4 --T 0 --model cox_hawkes --use_exo --exo_standardize --exo_joint \
+  --exo_window 1.0 --exo_step 5e-4 --exo_max_iter 800 --grad_clip 10 --lr_decay_exo 1e-4 \
+  --plot --no_show --method mle --max_iter 0 --step_alpha 2e-3 --step_beta 1e-4 --min_beta 0.6 --rho_max 0.85 --l2_alpha 0.02
+
+# θ 后 EM 更新 α
+python .\main.py fit --input bund --dim 4 --T 0 --model cox_hawkes --use_exo --exo_standardize --exo_em \
+  --exo_window 2.0 --exo_step 1e-3 --exo_max_iter 500 --plot --no_show --method mle --max_iter 1200 \
+  --step_mu 5e-3 --step_alpha 5e-3 --step_beta 2e-4 --min_beta 0.4 --rho_max 0.9
+```
+
+参考：Bund 数据来自 tick 的公开示例（20 日 × 4 通道）；外生因子稳健性、优化与标准化处理参考实务做法与相关开源实现（如 Kramer 的外生因子模型实现）。
+
 ## 扩展方向
 
 - **稳定性保证**：`alpha/beta` 的谱半径 < 1 确保过程稳定

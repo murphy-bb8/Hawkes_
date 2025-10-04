@@ -1,9 +1,9 @@
-# 查看两个文件分别多少事件
-import json,sys
-for f in ["data_sim.json","events.json"]:
-    try:
-        with open(f,"r",encoding="utf-8") as fh:
-            ev=json.load(fh)
-        print(f, "events:", len(ev))
-    except Exception as e:
-        print(f, "=>", e)
+from tick.hawkes import HawkesProcess
+from tick.hawkes import SimuHawkesExpKernels
+
+# 尝试加载 Bund 数据集
+try:
+    dataset = SimuHawkesExpKernels.from_dataset('bund')
+    print("Bund 数据集加载成功！")
+except Exception as e:
+    print(f"加载 Bund 数据集时出错：{e}")

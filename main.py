@@ -2,13 +2,20 @@ import argparse
 import numpy as np
 
 from workflow.models.hawkes import HawkesExponential
+from workflow.models.cox_hawkes import CoxHawkesExponential
+from workflow.features.exogenous import build_proxy_exogenous
+from workflow.fit.mle_exo import fit_cox_hawkes_theta
+from workflow.fit.joint_exo import fit_cox_hawkes_joint
+from workflow.fit.em_exo import em_update_alpha
+from workflow.fit.map_em_exo import map_em_exogenous
+from workflow.features.exogenous import with_intercept
+from workflow.viz.plots_exo import plot_exogenous_trajectories
+from workflow.data.bund import fetch_bund_events, load_bund_events_local
 from workflow.fit import fit_hawkes_exponential, map_em_exponential
 from workflow.eval import compare_hawkes_poisson
 from workflow.viz import plot_event_raster, plot_intensity, plot_residuals, plot_adjacency_heatmap
 from workflow.io import save_events_json, load_events_json
 from workflow.tuning.grid import grid_search
-from workflow.gof import ks_exp_test, ks_uniform_test, ljung_box_test, compute_uniform_from_residuals
-from workflow.gof import plot_gof_hist, plot_gof_qq
 from workflow.preprocess import add_jitter_to_events, estimate_piecewise_mu
 
 
@@ -19,7 +26,11 @@ def run_simulate(args: argparse.Namespace):
     mu = np.full(dim, args.mu)
     alpha = np.full((dim, dim), args.alpha)
     beta = np.full((dim, dim), args.beta)
-    model = HawkesExponential(mu, alpha, beta)
+    if getattr(args, 'model', 'hawkes') == 'cox_hawkes':
+        # build a trivial exogenous with proxies from simulated events later; first simulate using constant baseline
+        model = HawkesExponential(mu, alpha, beta)
+    else:
+        model = HawkesExponential(mu, alpha, beta)
     events = model.simulate_ogata(T=T, seed=seed)
     # 可选：确保至少产生一定数量的事件
     if args.min_events is not None and args.min_events > 0 and len(events) < args.min_events:
@@ -49,10 +60,23 @@ def run_simulate(args: argparse.Namespace):
 
 def run_fit(args: argparse.Namespace):
     # load or simulate
-    if args.input:
+    if args.input == 'bund':
+        # Prefer local path if provided via --bund_path
+        if getattr(args, 'bund_path', None):
+            events, T_bund = load_bund_events_local(args.bund_path, day=None)
+        else:
+            events, T_bund = fetch_bund_events(day=None)
+        print(f"载入 Bund 事件数: {len(events)}，T≈{T_bund:.2f}s")
+        # 若用户未指定 T，用 Bund 的时间范围
+        if args.T is None or args.T <= 0:
+            args.T = T_bund
+        # auto dim=4 if not set
+        if args.dim is None or args.dim <= 0:
+            args.dim = 4
+        true_model = HawkesExponential(np.full(args.dim, args.mu), np.full((args.dim, args.dim), args.alpha), np.full((args.dim, args.dim), args.beta))
+    elif args.input:
         events = load_events_json(args.input)
         print(f"载入事件数: {len(events)}")
-        # create a dummy model for plotting intensity baseline
         true_model = HawkesExponential(np.full(args.dim, args.mu), np.full((args.dim, args.dim), args.alpha), np.full((args.dim, args.dim), args.beta))
     else:
         events, true_model = run_simulate(args)
@@ -103,6 +127,45 @@ def run_fit(args: argparse.Namespace):
         print("loglik=", fit.loglik, "converged=", fit.converged, "iters=", fit.n_iter)
         comp = compare_hawkes_poisson(events, args.T, fit.mu, fit.alpha, fit.beta)
 
+    # Optional: Cox×Hawkes baseline fitting for exogenous features
+    if getattr(args, 'use_exo', False):
+        exo = build_proxy_exogenous(events, args.T, args.dim, window=args.exo_window, standardize=args.exo_standardize)
+        theta0 = np.zeros((args.dim, exo.num_features))
+        if getattr(args, 'method', 'mle') == 'map_em_exo':
+            exo_i = with_intercept(exo)
+            res = map_em_exogenous(
+                events, args.T, args.dim, exo_i,
+                max_iter=args.exo_max_iter, step_theta=args.exo_step,
+                min_beta=args.min_beta, rho_max=args.rho_max,
+                prior_alpha_a=args.prior_alpha_a, prior_alpha_b=args.prior_alpha_b,
+            )
+            est_model = HawkesExponential(est_model.mu, res.alpha, res.beta)
+            print("MAP-EM-Exo 结果: loglik=", res.loglik, " iters=", res.n_iter, " theta shape:", res.theta.shape)
+        elif getattr(args, 'exo_joint', False):
+            joint = fit_cox_hawkes_joint(
+                events, args.T, args.dim, exo,
+                init_theta=theta0, init_alpha=est_model.alpha, init_beta=est_model.beta,
+                max_iter=args.exo_max_iter, step_theta=args.exo_step, step_alpha=args.step_alpha,
+                step_beta=args.step_beta, min_beta=args.min_beta, l2_alpha=args.l2_alpha, rho_max=args.rho_max,
+            )
+            est_model = HawkesExponential(joint.theta @ 0 + est_model.mu, joint.alpha, joint.beta)  # keep Hawkes for plotting
+            print("Exogenous joint (θ,α,β) 拟合: loglik=", joint.loglik, " iters=", joint.n_iter)
+        else:
+            exo_fit = fit_cox_hawkes_theta(events, args.T, args.dim, exo, est_model.alpha, est_model.beta, init_theta=theta0,
+                                           step=args.exo_step, max_iter=args.exo_max_iter, adam=True,
+                                           grad_clip=args.grad_clip, lr_decay=args.lr_decay_exo)
+            print("Exogenous baseline (Cox×Hawkes) θ 拟合:")
+            print("theta shape:", exo_fit.theta.shape, " loglik:", exo_fit.loglik)
+            if getattr(args, 'exo_em', False):
+                emres = em_update_alpha(events, args.T, args.dim, exo_fit.theta, est_model.alpha, est_model.beta, max_iter=max(20, args.exo_max_iter // 10))
+                est_model = HawkesExponential(est_model.mu, emres.alpha, emres.beta)
+                print("EM alpha 更新完成: iters=", emres.n_iter)
+        if args.plot:
+            if getattr(args, 'no_show', False):
+                plot_exogenous_trajectories(exo.breakpoints, exo.features, savepath='docs/img/exo_features.png')
+            else:
+                plot_exogenous_trajectories(exo.breakpoints, exo.features)
+
     # compare with Poisson baseline
     print("模型比较(AIC):", comp)
 
@@ -147,7 +210,7 @@ def main():
     p_sim.add_argument("--out", type=str, default=None, help="保存仿真事件到JSON路径")
     p_sim.set_defaults(func=run_simulate)
 
-    p_fit = sub.add_parser("fit", help="仿真并拟合 Hawkes 参数，比较泊松基线")
+    p_fit = sub.add_parser("fit", help="仿真并拟合 Hawkes 参数，比较泊松基线；支持 Cox×Hawkes 外生项")
     p_fit.add_argument("--dim", type=int, default=1)
     p_fit.add_argument("--T", type=float, default=10.0)
     p_fit.add_argument("--mu", type=float, default=0.2)
@@ -156,8 +219,19 @@ def main():
     p_fit.add_argument("--seed", type=int, default=42)
     p_fit.add_argument("--plot", action="store_true")
     p_fit.add_argument("--no_show", action="store_true", help="仅保存图片，不显示交互窗口")
-    p_fit.add_argument("--input", type=str, default=None, help="从JSON载入事件")
-    p_fit.add_argument("--method", type=str, default="mle", choices=["mle", "map_em"], help="拟合方法")
+    p_fit.add_argument("--input", type=str, default=None, help="从JSON载入事件；或输入 'bund' 以加载 Bund 示例")
+    p_fit.add_argument("--bund_path", type=str, default=None, help="本地 tick-datasets 根目录或 bund.npz 全路径")
+    p_fit.add_argument("--model", type=str, default="hawkes", choices=["hawkes", "cox_hawkes"], help="模型类型")
+    p_fit.add_argument("--use_exo", action="store_true", help="启用外生因子（Cox×Hawkes 基线）")
+    p_fit.add_argument("--exo_window", type=float, default=1.0, help="外生 proxy 的时间窗口（秒）")
+    p_fit.add_argument("--exo_step", type=float, default=1e-3, help="exo θ 的学习率")
+    p_fit.add_argument("--exo_max_iter", type=int, default=300, help="exo 迭代次数（θ 或 θ,α,β）")
+    p_fit.add_argument("--exo_joint", action="store_true", help="联合优化 θ 与 α/β")
+    p_fit.add_argument("--exo_standardize", action="store_true", help="对外生特征做标准化")
+    p_fit.add_argument("--grad_clip", type=float, default=10.0, help="梯度裁剪阈值")
+    p_fit.add_argument("--lr_decay_exo", type=float, default=0.0, help="exo 学习率衰减系数")
+    p_fit.add_argument("--exo_em", action="store_true", help="θ 拟合后，EM 更新 α")
+    p_fit.add_argument("--method", type=str, default="mle", choices=["mle", "map_em", "map_em_exo"], help="拟合方法")
     p_fit.add_argument("--out", type=str, default=None, help="保存事件到JSON")
     # 稳定性相关可调参数
     p_fit.add_argument("--max_iter", type=int, default=600)
@@ -247,6 +321,9 @@ def main():
     p_gof.add_argument("--prior_beta_b", type=float, default=2.0)
 
     def run_gof(args: argparse.Namespace):
+        # Lazy import to avoid requiring statsmodels unless GOF is used
+        from workflow.gof import ks_exp_test, ks_uniform_test, ljung_box_test, compute_uniform_from_residuals
+        from workflow.gof import plot_gof_hist, plot_gof_qq
         events = load_events_json(args.input)
         if args.jitter:
             events = add_jitter_to_events(events, eps=1e-6)
