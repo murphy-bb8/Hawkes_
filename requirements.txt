@@ -2,4 +2,9 @@ numpy==1.26.4
 matplotlib==3.8.4
 scipy==1.11.4
 statsmodels==0.14.2
+tick==0.7.0
+pandas==2.1.4
+seaborn==0.13.0
+jupyter==1.0.0
+tqdm==4.66.1
 
