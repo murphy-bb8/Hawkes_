@@ -4,7 +4,12 @@ from typing import List, Optional
 
 
 def _setup_cn():
-    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
+    # 尝试优先使用系统常见中文字体，若不存在自动退回 DejaVu Sans
+    candidates = [
+        'Microsoft YaHei', 'SimHei', 'Noto Sans CJK SC', 'PingFang SC', 'WenQuanYi Zen Hei',
+        'DejaVu Sans'
+    ]
+    plt.rcParams['font.sans-serif'] = candidates
     plt.rcParams['axes.unicode_minus'] = False
 
 

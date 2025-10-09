@@ -1,6 +1,6 @@
-# 应用 Hawkes 过程对于订单流建模：毒性识别与价格冲击预测
+# 多维 Hawkes 过程（指数核）：高频订单流建模与评估工具集
 
-本项目实现了基于指数核的多维 Hawkes 过程，用于高频订单流建模；提供泊松过程基线、Ogata 薄化仿真、最大似然估计（MLE）、可视化与模型比较，并给出“毒性”市价单识别与短期价格冲击的简易度量。
+本项目提供基于指数核的多维 Hawkes 过程建模与评估的完整工具链，覆盖：仿真、参数估计（MLE / MAP‑EM）、稳定性与正则化、外生因子（Cox×Hawkes）基线、拟合优度（KS/QQ/Ljung‑Box）与可视化。适用于订单流/逐笔成交等不齐次点过程数据的聚集性与互激励分析。
 
 ## 安装
 
@@ -43,7 +43,7 @@ pip install -r requirements.txt
 
 ## 快速开始
 
-仿真（保存JSON与图片，不弹窗）：
+仿真（保存JSON与图片）：
 
 ```bash
 python main.py simulate --dim 1 --T 30 --mu 0.6 --alpha 0.7 --beta 1.2 --plot --no_show --min_events 60 --max_retries 80 --out events.json
@@ -100,45 +100,79 @@ python main.py gof --dim 1 --T 30 --input events.json --method mle --jitter --se
 - 结论：
   - 模型在该数据上拟合良好，较泊松基线有显著性能提升，残差分布与独立性检验均通过。
 
-### 可视化（示例输出）
+## 本次实验（2025-10-07，dim=4，T≈50391.74）
 
-下图由以下命令自动生成（文件位于项目根目录）：
+在 Bund 事件样本（dim=4，T≈50391.74）上运行 MAP-EM + 季节性基线初值与抖动，命令：
 
 ```bash
-# 拟合与可视化
-python .\main.py fit --dim 1 --T 30 --input .\events.json --plot --no_show \
-  --method mle --max_iter 3000 --step_mu 5e-3 --step_alpha 5e-3 --step_beta 1e-4 \
-  --min_beta 0.4 --rho_max 0.85 --adj_threshold 0.0
-
-# 拟合优度检验
-python .\main.py gof --dim 1 --T 30 --input .\events.json --method mle \
-  --jitter --seasonal_bins 10
+python main.py gof --dim 4 --T 50391.74 --input events.json \
+  --method map_em --jitter --seasonal_bins 20 \
+  --max_iter 800 --min_beta 0.5 --rho_max 0.85
 ```
 
-#### 事件栅格与强度轨迹
-![事件栅格](docs/img/fit_raster.png)
+输出图片已归档到 `docs/exp_2025-10-07/` 目录，便于与上一次实验区分：
 
-![强度轨迹](docs/img/fit_intensity.png)
+- 事件与拟合模型：![fit_raster](docs/exp_2025-10-07/fit_raster.png)
+- 拟合强度轨迹：![fit_intensity](docs/exp_2025-10-07/fit_intensity.png)
+- 残差直方图：![fit_residuals](docs/exp_2025-10-07/fit_residuals.png)
+- 稀疏传染图：![fit_adjacency](docs/exp_2025-10-07/fit_adjacency.png)
 
-#### 残差分析
-![残差直方图](docs/img/fit_residuals.png)
+### 关键观察
+- 维度2、维度3自激发较强，跨维度传染非对称；
+- 约 3e4 时间点附近出现多维同步性峰值；
+- 残差较 Exp(1) 有偏离，建议引入外生因子（`--use_exo`）或使用多核（双指数/幂律）进一步提升拟合度。
 
-#### 拟合优度检验
-![GOF 直方图 vs Exp(1)](docs/img/gof_hist.png)
+### 改进策略
 
-![GOF QQ-plot 对 Exp(1)](docs/img/gof_qq.png)
+可操作改进（优先级从高到中）：
+1) 启用外生因子（Cox×Hawkes 基线）吸收宏观/微观时变驱动
+```bash
+python main.py fit --input bund --dim 4 --T 0 --model cox_hawkes --use_exo --exo_standardize \
+  --exo_window 2.0 --exo_step 1e-3 --exo_max_iter 500 --grad_clip 10 \
+  --plot --no_show --method mle --max_iter 800 --step_alpha 5e-3 --step_beta 2e-4 \
+  --min_beta 0.5 --rho_max 0.85
+```
+2) 稳定化与稀疏化：限制谱半径与对 `alpha` 加 L2/L1（后者可借助 tick 对照）
+```bash
+python main.py fit --input events.json --dim 4 --T 50391.74 --plot --no_show \
+  --method mle --max_iter 1500 --step_alpha 5e-3 --step_beta 2e-4 \
+  --min_beta 0.5 --rho_max 0.85 --l2_alpha 0.02
+```
+3) GOF 工作流
+```bash
+python main.py gof --dim 4 --T 50391.74 --input events.json \
+  --method map_em --jitter --seasonal_bins 20 --max_iter 800 \
+  --min_beta 0.5 --rho_max 0.85
+```
 
+说明：本次实验已是“多变量 Hawkes”（dim=4）。`--seasonal_bins 20` 仅用于估计基线初值（piecewise 常数），最终模型仍为常数基线的 Hawkes；若需真正的时变基线或外生驱动，应使用 Cox×Hawkes。
 
-## 毒性识别与价格冲击（暂定）
+---
 
-`analytics.py` 提供：
-- 毒性分数：短期窗口内由该笔市价单引发的期望“子事件”增量的近似值；
-- 冲击代理：价格冲击可取毒性分数的线性函数（系数可用实证估计）。
+### 外生因子（Cox×Hawkes）
+- 建模：`λ_i(t) = exp(θ_i^T X(t)) + Σ_j α_{ij} e^{-β_{ij}(t-t_k^j)}`，其中 `X(t)` 采用分段常数特征
+- 特征：支持基于事件的 proxy（`flow+`/`flow-`/`rv`），或替换为真实 LOB/行情因子
+- 稳定性：对 `θ^T X` 做裁剪避免指数溢出（logits ∈ [-50,50]），并支持特征标准化（均值-方差）
+- 优化：
+  - θ：Adam（带梯度裁剪、学习率衰减）
+  - θ,α,β 联合：θ 用 Adam，α/β 加非负/下界与谱半径投影（ρ≤rho_max）
+  - 可选 EM：在 θ 固定后对 α 做责任分配更新
 
-## 进阶：结合 tick 包与本地 MHP 类
+## 基线建模
 
-- 可选方案：使用 `tick` 包（`tick.hawkes`）进行参数估计/仿真，以对比本实现（需 `pip install tick`）。
-- 也可沿用本仓库 `MHP`/`HawkesExponential`，前者适合入门演示，后者支持多维与评估工具链。
+- 目前实验默认的 Hawkes 模型基线为“常数 μ”（逐维常数），并在 GOF 阶段用 `--seasonal_bins` 估计一个“分段常数初值”，帮助收敛与吸收季节性；但最终模型仍采用常数基线。
+- 若需要真实的时变基线/外生驱动，需启用 Cox×Hawkes：`λ_i(t) = exp(θ_i^T X(t)) + Σ_j α_{ij} e^{-β_{ij}(t-t_k^j)}`。
+- 外生特征 X(t)（可采用的变量清单）：
+  - 订单流不平衡 OFI / Queue Imbalance（买卖盘差、委托深度差）
+  - 签名成交量与成交笔数（signed volume/trade count）
+  - 中间价变动与短期收益（mid-price returns）
+  - 实现波动率/区间波动（realized volatility, high-low range）
+  - 买卖价差与隐含成本（bid-ask spread, effective spread）
+  - 成交密度/到达强度（trade intensity in rolling window）
+  - 市场状态代理（开盘/收盘、再平衡窗口、宏观公告时段 dummy）
+
+开启 Cox×Hawkes 与外生特征的推荐命令见上节“改进策略”。若需更强的稳健性，可在 θ 固定后执行 `--exo_em` 以 EM 更新 α，或使用 `--exo_joint` 联合优化 θ 与 α/β。
+
 
 ## 方法说明
 
@@ -165,14 +199,6 @@ python .\main.py gof --dim 1 --T 30 --input .\events.json --method mle \
 
 - **稀疏传染图**：`--adj_threshold` 直观展示谁激励谁，结合 tick 的 L1 正则化可做对照。
 
-### 外生因子（Cox×Hawkes）
-- 建模：`λ_i(t) = exp(θ_i^T X(t)) + Σ_j α_{ij} e^{-β_{ij}(t-t_k^j)}`，其中 `X(t)` 采用分段常数特征
-- 特征：支持基于事件的 proxy（`flow+`/`flow-`/`rv`），或替换为真实 LOB/行情因子
-- 稳定性：对 `θ^T X` 做裁剪避免指数溢出（logits ∈ [-50,50]），并支持特征标准化（均值-方差）
-- 优化：
-  - θ：Adam（带梯度裁剪、学习率衰减）
-  - θ,α,β 联合：θ 用 Adam，α/β 加非负/下界与谱半径投影（ρ≤rho_max）
-  - 可选 EM：在 θ 固定后对 α 做责任分配更新
 
 CLI（Bund + exo 示例）
 ```powershell
@@ -196,15 +222,21 @@ python .\main.py fit --input bund --dim 4 --T 0 --model cox_hawkes --use_exo --e
 
 ## 扩展方向
 
-- **稳定性保证**：`alpha/beta` 的谱半径 < 1 确保过程稳定
-- **多维建模**：维度可映射买/卖/不同事件类型，支持跨类型激励分析
-- **核函数扩展**：可替换为双指数、幂律等核函数，避免将长记忆误判为短记忆
-- **外生因子**：加入价格过程、成交量等外生变量进行联立建模
+- **稳定性保证**：`alpha/beta` 的谱半径 < 1；必要时提高 `min_beta`、降低 `rho_max`，并对 `alpha` 加 L2/L1 约束以稀疏化。
+- **多维建模（已启用）**：当前为多变量 Hawkes（dim=4）。可进一步拆分维度（买/卖/不同触发类型）、或合并跨市场/跨合约事件。
+- **核函数扩展**：双指数/幂律/非参数核，以刻画短记忆+长记忆；或采用可学习核（如分段常数核）。
+- **时变基线**：从常数 μ 过渡到 Cox×Hawkes（`exp(θ^T X)`）或分段常数/样条基线，吸收宏观/季节性驱动。
+- **估计稳健化**：引入早停、学习率衰减、梯度裁剪、谱半径投影；并提供 tick 的 L1 解作对照。
+- **评估强化**：在 KS/QQ/LB 基础上，补充时间块交叉验证、留出日滚动评估与事后事件预测精度。
+
+## 毒性识别与价格冲击（暂定）
+
+`analytics.py` 提供：
+- 毒性分数：短期窗口内由该笔市价单引发的期望“子事件”增量的近似值；
+- 冲击代理：价格冲击可取毒性分数的线性函数（系数可用实证估计）。
 
 ## 备注
 
-- 稳定性：`alpha/beta` 的谱半径<1；
-- 多维：维度可映射买/卖/不同事件类型；
-- 可扩展：替换核函数、加入外生因子或价格过程联立建模。
-- 扩展基线建模：当前模型的基线强度（μ）是常数，可尝试使用时间依赖基线（例如：分段常数基线、线性基线或样条基线）来考虑不同时间段内市场的不同交易节奏。
-- 互激励建模：目前模型使用的是**单变量 Hawkes 过程**，适用于单一事件序列。如果希望捕捉不同事件（例如买单、卖单、价跃升等）之间的互激励效应，可以扩展为 **多变量 Hawkes 过程**。在多维 Hawkes 模型中，每个维度之间的激励（αij）参数可以帮助了解一个事件如何通过其激励其他类型的事件。
+- 默认图像输出位于根目录或 `docs/exp_*/`；使用 `--no_show` 以避免交互阻塞。
+- Windows/PowerShell 与 Linux 的路径分隔符不同，命令示例已统一为跨平台写法（相对路径不含反斜杠）。
+- 若发生极端峰值与残差偏离，优先检查：时间戳抖动、分段季节性、谱半径约束与正则化是否打开；其次再引入外生特征或核函数扩展。

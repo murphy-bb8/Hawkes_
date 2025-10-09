@@ -30,12 +30,19 @@ class ExogenousDesign:
         return int(self.features.shape[1])
 
     def value_at(self, t: float) -> np.ndarray:
-        if t < self.breakpoints[0] or t > self.breakpoints[-1]:
-            raise ValueError("t out of range for ExogenousDesign")
-        # idx is the last breakpoint <= t
-        idx = int(np.searchsorted(self.breakpoints, t, side="right") - 1)
-        if idx == self.num_segments:
-            idx -= 1
+        # 容错：将边界外的 t 夹到区间 [b0, bM]
+        b0 = float(self.breakpoints[0])
+        bM = float(self.breakpoints[-1])
+        if t <= b0:
+            idx = 0
+        elif t >= bM:
+            # t 恰好等于末端（或轻微越界）时，使用最后一个 piece
+            idx = self.num_segments - 1
+        else:
+            # idx is the last breakpoint <= t
+            idx = int(np.searchsorted(self.breakpoints, t, side="right") - 1)
+            if idx == self.num_segments:
+                idx -= 1
         x = self.features[idx]
         if self.mean_ is not None and self.std_ is not None:
             return (x - self.mean_) / self.std_

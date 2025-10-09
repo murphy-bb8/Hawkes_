@@ -319,6 +319,15 @@ def main():
     p_gof.add_argument("--prior_alpha_b", type=float, default=1.0)
     p_gof.add_argument("--prior_beta_a", type=float, default=2.0)
     p_gof.add_argument("--prior_beta_b", type=float, default=2.0)
+    p_gof.add_argument("--l2_alpha", type=float, default=0.0, help="对 alpha 的L2正则（稳定化）")
+    # 可选：外生因子基线（Cox×Hawkes）以增强GOF
+    p_gof.add_argument("--use_exo", action="store_true", help="使用基于代理特征的 Cox×Hawkes 基线进行 GOF")
+    p_gof.add_argument("--exo_window", type=float, default=1.0, help="外生 proxy 的时间窗口（秒）")
+    p_gof.add_argument("--exo_step", type=float, default=1e-3, help="exo θ 的学习率")
+    p_gof.add_argument("--exo_max_iter", type=int, default=300, help="exo 迭代次数（θ）")
+    p_gof.add_argument("--exo_standardize", action="store_true", help="对外生特征做标准化")
+    p_gof.add_argument("--grad_clip", type=float, default=10.0, help="exo 梯度裁剪阈值")
+    p_gof.add_argument("--lr_decay_exo", type=float, default=0.0, help="exo 学习率衰减系数")
 
     def run_gof(args: argparse.Namespace):
         # Lazy import to avoid requiring statsmodels unless GOF is used
@@ -331,7 +340,7 @@ def main():
             mu0 = estimate_piecewise_mu(events, args.T, args.dim, bins=args.seasonal_bins)
         else:
             mu0 = None
-        # 拟合
+        # 拟合（先得到 alpha/beta 与常数基线 mu 或用于 exo 的初值）
         if args.method == 'map_em':
             res = map_em_exponential(
                 events, T=args.T, dim=args.dim, init_mu=mu0,
@@ -345,10 +354,28 @@ def main():
             fit = fit_hawkes_exponential(
                 events, T=args.T, dim=args.dim, max_iter=args.max_iter,
                 step_mu=args.step_mu, step_alpha=args.step_alpha, step_beta=args.step_beta,
-                min_beta=args.min_beta, l2_alpha=0.0, rho_max=args.rho_max,
+                min_beta=args.min_beta, l2_alpha=args.l2_alpha, rho_max=args.rho_max,
             )
             mu, alpha, beta = fit.mu, fit.alpha, fit.beta
-        model = HawkesExponential(mu, alpha, beta)
+        # 若使用外生因子基线，则在固定 α/β 的前提下拟合 θ，并用 Cox×Hawkes 计算残差
+        if getattr(args, 'use_exo', False):
+            from workflow.features.exogenous import build_proxy_exogenous
+            from workflow.fit.mle_exo import fit_cox_hawkes_theta
+            from workflow.models.cox_hawkes import CoxHawkesExponential
+            exo = build_proxy_exogenous(
+                events, args.T, args.dim,
+                window=args.exo_window, standardize=args.exo_standardize,
+            )
+            theta0 = np.zeros((args.dim, exo.num_features))
+            exo_fit = fit_cox_hawkes_theta(
+                events, args.T, args.dim, exo,
+                alpha=alpha, beta=beta, init_theta=theta0,
+                step=args.exo_step, max_iter=args.exo_max_iter, adam=True,
+                grad_clip=args.grad_clip, lr_decay=args.lr_decay_exo,
+            )
+            model = CoxHawkesExponential(exo_fit.theta, alpha, beta, exo)
+        else:
+            model = HawkesExponential(mu, alpha, beta)
         # 残差与GOF
         resids = model.compensate_residuals(events, args.T)
         ks_exp = ks_exp_test(resids)

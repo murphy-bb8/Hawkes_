@@ -113,7 +113,13 @@ class HawkesExponential:
                 beta_ij = self.beta[i, j]
                 contrib = 0.0
                 for t_j in times_by_type[j]:
-                    contrib += (1.0 - math.exp(-beta_ij * (T - t_j)))
+                    # 仅对 t_j < T 的事件累加；否则 (T - t_j) 为负会导致 exp(+x) 溢出
+                    if t_j >= T:
+                        continue
+                    dt_T = T - t_j
+                    # 数值稳定：1 - exp(-x) 使用 -expm1(-x)
+                    x = beta_ij * dt_T
+                    contrib += -math.expm1(-x)
                 integral += float(self.alpha[i, j] / beta_ij) * contrib
         return float(log_terms - integral)
 

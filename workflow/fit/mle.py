@@ -110,9 +110,14 @@ def fit_hawkes_exponential(
                 sum_T_minus_exp = 0.0
                 for t_j in times_by_type[j]:
                     dtT = T - t_j
-                    e = math.exp(-b * dtT)
-                    sum_one_minus += (1.0 - e)
-                    sum_T_minus_exp += dtT * e
+                    # 仅对 t_j < T 累加，避免 exp(+x) 溢出
+                    if dtT <= 0:
+                        continue
+                    # 稳定地计算 1 - exp(-b*dtT)
+                    one_minus_e = -math.expm1(-b * dtT)
+                    sum_one_minus += one_minus_e
+                    # dtT * exp(-b*dtT) 安全（可能下溢为0，但不溢出）
+                    sum_T_minus_exp += dtT * math.exp(-b * dtT)
                 g_alpha[i, j] += -(1.0 / b) * sum_one_minus
                 g_beta[i, j] += -alpha[i, j] * ( -sum_one_minus / (b * b) + sum_T_minus_exp / b )
 
