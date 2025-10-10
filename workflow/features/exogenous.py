@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from dataclasses import dataclass
 from typing import List, Tuple, Sequence, Optional
@@ -71,6 +72,37 @@ class ExogenousDesign:
             X_scaled = (self.features - self.mean_) / self.std_
             return (X_scaled * weights[:, None]).sum(axis=0)
         return (self.features * weights[:, None]).sum(axis=0)
+
+    def integral_exp_theta_between(self, theta_i: np.ndarray, a: float, b: float) -> float:
+        """Exact ∫_a^b exp(θ_i^T X(t)) dt under piecewise-constant X(t).
+        Handles arbitrary [a,b] spanning multiple segments and clamps to design range.
+        """
+        b0 = float(self.breakpoints[0])
+        bM = float(self.breakpoints[-1])
+        if b <= a:
+            return 0.0
+        a = max(a, b0)
+        b = min(b, bM)
+        if b <= a:
+            return 0.0
+        # helper to scale a single feature vector
+        def _scale_vec(x: np.ndarray) -> np.ndarray:
+            if self.mean_ is not None and self.std_ is not None:
+                return (x - self.mean_) / self.std_
+            return x
+        left = int(np.searchsorted(self.breakpoints, a, side="right") - 1)
+        right = int(np.searchsorted(self.breakpoints, b, side="right") - 1)
+        total = 0.0
+        for m in range(left, right + 1):
+            seg_start = max(a, float(self.breakpoints[m]))
+            seg_end = min(b, float(self.breakpoints[m + 1]))
+            dt = seg_end - seg_start
+            if dt <= 0:
+                continue
+            x = _scale_vec(self.features[m])
+            logit = float(np.clip(x @ theta_i, -50.0, 50.0))
+            total += math.exp(logit) * dt
+        return float(total)
 
 
 def _rolling_count_within(times: np.ndarray, window: float, t_grid: np.ndarray) -> np.ndarray:

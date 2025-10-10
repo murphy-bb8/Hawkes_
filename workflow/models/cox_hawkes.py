@@ -72,7 +72,10 @@ class CoxHawkesExponential:
                 beta_ij = self.beta[i, j]
                 contrib = 0.0
                 for t_j in times_by_type[j]:
-                    contrib += (1.0 - math.exp(-beta_ij * (T - t_j)))
+                    if t_j >= T:
+                        continue
+                    x = beta_ij * (T - t_j)
+                    contrib += -math.expm1(-x)
                 integral += float(self.alpha[i, j] / beta_ij) * contrib
         return float(log_terms - integral)
 
@@ -87,8 +90,10 @@ class CoxHawkesExponential:
             dt = t - t_prev
             if dt < 0:
                 raise ValueError("Events must be ordered by time")
-            # baseline integral on (t_prev, t]: approximated by piecewise constant via design
-            base = sum(math.exp(float(self.theta[d] @ self.exo.value_at(t))) for d in range(self.dim)) * dt
+            # baseline integral on (t_prev, t]: exact integral with piecewise-constant design
+            base = 0.0
+            for d in range(self.dim):
+                base += self.exo.integral_exp_theta_between(self.theta[d], t_prev, t)
             if dt > 0:
                 term = (self.alpha / self.beta) * (1.0 - np.exp(-self.beta * dt)) * S
                 base += float(term.sum())
