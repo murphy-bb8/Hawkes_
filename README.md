@@ -49,7 +49,7 @@ pip install -r requirements.txt
 python main.py simulate --dim 1 --T 30 --mu 0.6 --alpha 0.7 --beta 1.2 --plot --no_show --min_events 60 --max_retries 80 --out events.json
 ```
 
-MLE 或 MAP-EM 拟合，并与泊松基线比较：
+MLE 或 MAP-EM 拟合，并与基线比较：
 
 ```bash
 # 稳定化 MLE
@@ -110,17 +110,18 @@ python main.py gof --dim 4 --T 50391.74 --input events.json \
   --max_iter 800 --min_beta 0.5 --rho_max 0.85
 ```
 
-输出图片已归档到 `docs/exp_2025-10-07/` 目录，便于与上一次实验区分：
+输出图片：
 
-- 事件与拟合模型：![fit_raster](docs/exp_2025-10-07/fit_raster.png)
-- 拟合强度轨迹：![fit_intensity](docs/exp_2025-10-07/fit_intensity.png)
-- 残差直方图：![fit_residuals](docs/exp_2025-10-07/fit_residuals.png)
-- 稀疏传染图：![fit_adjacency](docs/exp_2025-10-07/fit_adjacency.png)
+- 事件与拟合模型：![fit_raster](docs/img/fit_raster_2025-10-07.png)
+- 拟合强度轨迹：![fit_intensity](docs/img/fit_intensity_2025-10-07.png)
+- 残差直方图：![fit_residuals](docs/img/fit_residuals_2025-10-07.png)
+- 稀疏传染图：![fit_adjacency](docs/img/fit_adjacency_2025-10-07.png)
 
 ### 关键观察
 - 维度2、维度3自激发较强，跨维度传染非对称；
 - 约 3e4 时间点附近出现多维同步性峰值；
 - 残差较 Exp(1) 有偏离，建议引入外生因子（`--use_exo`）或使用多核（双指数/幂律）进一步提升拟合度。
+- 受数据爆发与不平衡影响，GOF 显著右尾。
 
 ### 改进策略
 
@@ -158,18 +159,11 @@ python main.py gof --dim 4 --T 50391.74 --input events.json \
   - θ,α,β 联合：θ 用 Adam，α/β 加非负/下界与谱半径投影（ρ≤rho_max）
   - 可选 EM：在 θ 固定后对 α 做责任分配更新
 
-## 基线建模
+## 基线建模（外生驱动）
 
-- 目前实验默认的 Hawkes 模型基线为“常数 μ”（逐维常数），并在 GOF 阶段用 `--seasonal_bins` 估计一个“分段常数初值”，帮助收敛与吸收季节性；但最终模型仍采用常数基线。
-- 若需要真实的时变基线/外生驱动，需启用 Cox×Hawkes：`λ_i(t) = exp(θ_i^T X(t)) + Σ_j α_{ij} e^{-β_{ij}(t-t_k^j)}`。
-- 外生特征 X(t)（可采用的变量清单）：
-  - 订单流不平衡 OFI / Queue Imbalance（买卖盘差、委托深度差）
-  - 签名成交量与成交笔数（signed volume/trade count）
-  - 中间价变动与短期收益（mid-price returns）
-  - 实现波动率/区间波动（realized volatility, high-low range）
-  - 买卖价差与隐含成本（bid-ask spread, effective spread）
-  - 成交密度/到达强度（trade intensity in rolling window）
-  - 市场状态代理（开盘/收盘、再平衡窗口、宏观公告时段 dummy）
+- 已支持 Cox×Hawkes 外生基线：`λ_i(t) = exp(θ_i^T X(t)) + Σ_j α_{ij} e^{-β_{ij}(t-t_k^j)}`，`X(t)` 为分段常数特征；`θ` 由 MLE/Adam 学习。
+- GOF 增强：`--use_exo` 会先用 MLE 得到 `α/β`，再拟合 `θ`，并用 Cox×Hawkes 计算残差做 KS/QQ/LB。
+- 外生特征建议：OFI/QI、签名成交量/笔数、收益与波动率、买卖价差、成交密度、开收盘/公告时段 dummy 等。可通过 `workflow/features/exogenous.py` 扩展。
 
 开启 Cox×Hawkes 与外生特征的推荐命令见上节“改进策略”。若需更强的稳健性，可在 θ 固定后执行 `--exo_em` 以 EM 更新 α，或使用 `--exo_joint` 联合优化 θ 与 α/β。
 
