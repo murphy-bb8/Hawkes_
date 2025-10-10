@@ -112,10 +112,10 @@ python main.py gof --dim 4 --T 50391.74 --input events.json \
 
 输出图片：
 
-- 事件与拟合模型：![fit_raster](docs/img/fit_raster_2025-10-07.png)
-- 拟合强度轨迹：![fit_intensity](docs/img/fit_intensity_2025-10-07.png)
-- 残差直方图：![fit_residuals](docs/img/fit_residuals_2025-10-07.png)
-- 稀疏传染图：![fit_adjacency](docs/img/fit_adjacency_2025-10-07.png)
+- 事件与拟合模型：![fit_raster](docs\exp_2025-10-07\fit_raster.png)
+- 拟合强度轨迹：![fit_intensity](docs\exp_2025-10-07\fit_intensity.png)
+- 残差直方图：![fit_residuals](docs\exp_2025-10-07\fit_residuals.png)
+- 稀疏传染图：![fit_adjacency](docs\exp_2025-10-07\fit_adjacency.png)
 
 ### 关键观察
 - 维度2、维度3自激发较强，跨维度传染非对称；
