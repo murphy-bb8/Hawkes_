@@ -19,6 +19,30 @@ from workflow.tuning.grid import grid_search
 from workflow.preprocess import add_jitter_to_events, estimate_piecewise_mu
 
 
+def _expected_T_for_min_events(dim: int, mu: float, alpha: float, beta: float, min_events: int) -> float:
+    # Approximate E[N] ≈ (sum mu) * T / (1 - rho), with rho ≈ spectral radius of alpha/beta.
+    if min_events is None or min_events <= 0:
+        return 0.0
+    sum_mu = float(mu) * max(dim, 1)
+    G = (alpha / max(beta, 1e-8))
+    rho = min(0.99, abs(G))  # univariate approx; dim>1 uses scalar alpha here
+    denom = max(1e-8, 1.0 - rho)
+    return float(min_events / max(sum_mu / denom, 1e-8))
+
+
+def _split_and_shift_events(events, T_total: float, split_train: float, split_val: float):
+    assert abs((split_train + split_val) - 1.0) < 1e-6, "split_train + split_val must be 1.0"
+    t_cut = float(T_total * split_train)
+    train = []
+    val = []
+    for t, i in sorted(events, key=lambda x: x[0]):
+        if t < t_cut:
+            train.append((float(t), int(i)))
+        else:
+            val.append((float(t - t_cut), int(i)))
+    return train, t_cut, val, float(T_total - t_cut)
+
+
 def run_simulate(args: argparse.Namespace):
     dim = args.dim
     T = args.T
@@ -31,15 +55,26 @@ def run_simulate(args: argparse.Namespace):
         model = HawkesExponential(mu, alpha, beta)
     else:
         model = HawkesExponential(mu, alpha, beta)
-    events = model.simulate_ogata(T=T, seed=seed)
-    # 可选：确保至少产生一定数量的事件
-    if args.min_events is not None and args.min_events > 0 and len(events) < args.min_events:
+    # 智能地达到目标事件数：自适应放大 T（首选做法A，稳定）
+    events = []
+    T_cur = T
+    if args.min_events is not None and args.min_events > 0:
+        if T_cur <= 0:
+            T_cur = max(1.0, _expected_T_for_min_events(dim, args.mu, args.alpha, args.beta, args.min_events))
         retries = 0
-        while len(events) < args.min_events and retries < args.max_retries:
+        while retries <= args.max_retries:
+            events = model.simulate_ogata(T=T_cur, seed=seed + retries if seed is not None else None)
+            if len(events) >= args.min_events:
+                break
+            # 放大时间窗后重仿真（指数放大，快速收敛到目标规模）
+            T_cur *= 2.0
             retries += 1
-            events = model.simulate_ogata(T=T, seed=seed + retries if seed is not None else None)
         if len(events) < args.min_events:
-            print(f"提示：未能达到期望事件数（min_events={args.min_events}），当前仅 {len(events)} 个。")
+            print(f"提示：未能达到期望事件数（min_events={args.min_events}），当前 {len(events)} 个，T≈{T_cur:.2f}。")
+        # 将最终 T 设置为实际使用的 T_cur 以便绘图与保存
+        T = T_cur
+    else:
+        events = model.simulate_ogata(T=T, seed=seed)
     print(f"生成事件数: {len(events)}")
     # 先保存，再绘图（避免交互式窗口阻塞导致未落盘）
     if args.out:
@@ -80,10 +115,20 @@ def run_fit(args: argparse.Namespace):
         true_model = HawkesExponential(np.full(args.dim, args.mu), np.full((args.dim, args.dim), args.alpha), np.full((args.dim, args.dim), args.beta))
     else:
         events, true_model = run_simulate(args)
+    # 训练/验证切分（若提供）
+    use_split = getattr(args, 'split_train', None) is not None and getattr(args, 'split_val', None) is not None
+    if use_split:
+        if abs(args.split_train + args.split_val - 1.0) > 1e-6:
+            raise ValueError("--split_train 与 --split_val 之和必须为 1.0")
+        train_events, T_train, val_events, T_val = _split_and_shift_events(events, args.T, args.split_train, args.split_val)
+    else:
+        train_events, T_train = events, args.T
+        val_events, T_val = events, args.T
+
     if args.method == "map_em":
         res = map_em_exponential(
-            events,
-            T=args.T,
+            train_events,
+            T=T_train,
             dim=args.dim,
             init_mu=None,
             init_alpha=None,
@@ -96,7 +141,7 @@ def run_fit(args: argparse.Namespace):
             prior_alpha_b=args.prior_alpha_b,
             prior_beta_a=args.prior_beta_a,
             prior_beta_b=args.prior_beta_b,
-            update_beta=args.update_beta,
+            update_beta=(not getattr(args, 'freeze_beta', False)) if hasattr(args, 'freeze_beta') else args.update_beta,
         )
         mu, alpha, beta = res.mu, res.alpha, res.beta
         est_model = HawkesExponential(mu, alpha, beta)
@@ -105,16 +150,16 @@ def run_fit(args: argparse.Namespace):
         print("alpha=\n", alpha)
         print("beta=\n", beta)
         print("loglik=", res.loglik, "iters=", res.n_iter)
-        comp = compare_hawkes_poisson(events, args.T, mu, alpha, beta)
+        comp = compare_hawkes_poisson(val_events, T_val, mu, alpha, beta)
     else:
         fit = fit_hawkes_exponential(
-            events,
-            T=args.T,
+            train_events,
+            T=T_train,
             dim=args.dim,
             max_iter=args.max_iter,
             step_mu=args.step_mu,
             step_alpha=args.step_alpha,
-            step_beta=args.step_beta,
+            step_beta=0.0 if getattr(args, 'freeze_beta', False) else args.step_beta,
             min_beta=args.min_beta,
             l2_alpha=args.l2_alpha,
             rho_max=args.rho_max,
@@ -125,16 +170,17 @@ def run_fit(args: argparse.Namespace):
         print("alpha=\n", fit.alpha)
         print("beta=\n", fit.beta)
         print("loglik=", fit.loglik, "converged=", fit.converged, "iters=", fit.n_iter)
-        comp = compare_hawkes_poisson(events, args.T, fit.mu, fit.alpha, fit.beta)
+        comp = compare_hawkes_poisson(val_events, T_val, fit.mu, fit.alpha, fit.beta)
 
     # Optional: Cox×Hawkes baseline fitting for exogenous features
     if getattr(args, 'use_exo', False):
-        exo = build_proxy_exogenous(events, args.T, args.dim, window=args.exo_window, standardize=args.exo_standardize)
+        # 在各自窗口上构造外生特征
+        exo = build_proxy_exogenous(train_events, T_train, args.dim, window=args.exo_window, standardize=args.exo_standardize)
         theta0 = np.zeros((args.dim, exo.num_features))
         if getattr(args, 'method', 'mle') == 'map_em_exo':
             exo_i = with_intercept(exo)
             res = map_em_exogenous(
-                events, args.T, args.dim, exo_i,
+                train_events, T_train, args.dim, exo_i,
                 max_iter=args.exo_max_iter, step_theta=args.exo_step,
                 min_beta=args.min_beta, rho_max=args.rho_max,
                 prior_alpha_a=args.prior_alpha_a, prior_alpha_b=args.prior_alpha_b,
@@ -143,23 +189,33 @@ def run_fit(args: argparse.Namespace):
             print("MAP-EM-Exo 结果: loglik=", res.loglik, " iters=", res.n_iter, " theta shape:", res.theta.shape)
         elif getattr(args, 'exo_joint', False):
             joint = fit_cox_hawkes_joint(
-                events, args.T, args.dim, exo,
+                train_events, T_train, args.dim, exo,
                 init_theta=theta0, init_alpha=est_model.alpha, init_beta=est_model.beta,
                 max_iter=args.exo_max_iter, step_theta=args.exo_step, step_alpha=args.step_alpha,
-                step_beta=args.step_beta, min_beta=args.min_beta, l2_alpha=args.l2_alpha, rho_max=args.rho_max,
+                step_beta=0.0 if getattr(args, 'freeze_beta', False) else args.step_beta, min_beta=args.min_beta, l2_alpha=args.l2_alpha, rho_max=args.rho_max,
             )
             est_model = HawkesExponential(joint.theta @ 0 + est_model.mu, joint.alpha, joint.beta)  # keep Hawkes for plotting
             print("Exogenous joint (θ,α,β) 拟合: loglik=", joint.loglik, " iters=", joint.n_iter)
         else:
-            exo_fit = fit_cox_hawkes_theta(events, args.T, args.dim, exo, est_model.alpha, est_model.beta, init_theta=theta0,
+            exo_fit = fit_cox_hawkes_theta(train_events, T_train, args.dim, exo, est_model.alpha, est_model.beta, init_theta=theta0,
                                            step=args.exo_step, max_iter=args.exo_max_iter, adam=True,
                                            grad_clip=args.grad_clip, lr_decay=args.lr_decay_exo)
             print("Exogenous baseline (Cox×Hawkes) θ 拟合:")
             print("theta shape:", exo_fit.theta.shape, " loglik:", exo_fit.loglik)
             if getattr(args, 'exo_em', False):
-                emres = em_update_alpha(events, args.T, args.dim, exo_fit.theta, est_model.alpha, est_model.beta, max_iter=max(20, args.exo_max_iter // 10))
+                emres = em_update_alpha(train_events, T_train, args.dim, exo_fit.theta, est_model.alpha, est_model.beta, max_iter=max(20, args.exo_max_iter // 10))
                 est_model = HawkesExponential(est_model.mu, emres.alpha, emres.beta)
                 print("EM alpha 更新完成: iters=", emres.n_iter)
+        # 在验证窗口上评估 full model（Cox×Hawkes）
+        exo_val = build_proxy_exogenous(val_events, T_val, args.dim, window=args.exo_window, standardize=args.exo_standardize)
+        from workflow.models.cox_hawkes import CoxHawkesExponential
+        model_full = CoxHawkesExponential(exo_fit.theta if 'exo_fit' in locals() else theta0, est_model.alpha, est_model.beta, exo_val)
+        ll_full = model_full.loglikelihood(val_events, T_val)
+        comp_full = {
+            'full_loglik': float(ll_full),
+            'full_aic': float(2 * (exo_val.num_features * args.dim + est_model.alpha.size + est_model.beta.size) - 2 * ll_full),
+        }
+        print("Full model (Cox×Hawkes) 验证集指标:", comp_full)
         if args.plot:
             if getattr(args, 'no_show', False):
                 plot_exogenous_trajectories(exo.breakpoints, exo.features, savepath='docs/img/exo_features.png')
@@ -167,7 +223,7 @@ def run_fit(args: argparse.Namespace):
                 plot_exogenous_trajectories(exo.breakpoints, exo.features)
 
     # compare with Poisson baseline
-    print("模型比较(AIC):", comp)
+    print("模型比较(AIC)（在验证集）:", comp)
 
     # 先保存，再绘图（避免阻塞）
     if args.out:
@@ -250,6 +306,10 @@ def main():
     p_fit.add_argument("--prior_beta_a", type=float, default=1.0)
     p_fit.add_argument("--prior_beta_b", type=float, default=1.0)
     p_fit.add_argument("--update_beta", action="store_true", help="MAP-EM 中是否更新 beta（默认不更新）")
+    # 训练/验证窗口与冻结 beta
+    p_fit.add_argument("--split_train", type=float, default=None, help="训练集比例，和 split_val 之和为 1")
+    p_fit.add_argument("--split_val", type=float, default=None, help="验证集比例，和 split_train 之和为 1")
+    p_fit.add_argument("--freeze_beta", action="store_true", help="冻结 beta，不在拟合中更新（EM/MLE 均生效）")
     p_fit.set_defaults(func=run_fit)
 
     # tune 子命令：在已有或仿真数据上做网格搜索
@@ -271,6 +331,11 @@ def main():
     p_tune.add_argument("--step_mu", type=float, default=1e-2)
     p_tune.add_argument("--step_alpha", type=float, default=1e-2)
     p_tune.add_argument("--step_beta", type=float, default=2e-4)
+    # 可选：验证窗口与 beta 网格固定
+    p_tune.add_argument("--split_train", type=float, default=None)
+    p_tune.add_argument("--split_val", type=float, default=None)
+    p_tune.add_argument("--beta_grid", type=float, nargs='*', default=None, help="若提供，则对该网格的固定 beta 值进行验证选择")
+    p_tune.add_argument("--freeze_beta", action="store_true", help="在网格时冻结 beta，不更新")
 
     def run_tune(args: argparse.Namespace):
         if args.input:
@@ -284,15 +349,29 @@ def main():
             )
             events, _ = run_simulate(sim_args)
             T = args.T
+        # 训练/验证切分（若提供）
+        use_split = args.split_train is not None and args.split_val is not None
+        if use_split:
+            if abs(args.split_train + args.split_val - 1.0) > 1e-6:
+                raise ValueError("--split_train 与 --split_val 之和必须为 1.0")
+            train_events, T_train, val_events, T_val = _split_and_shift_events(events, T, args.split_train, args.split_val)
+        else:
+            train_events, T_train = events, T
+            val_events, T_val = events, T
+
         report = grid_search(
-            events, T, args.dim,
+            train_events, T_train, args.dim,
             grid_min_beta=args.grid_min_beta,
             grid_l2_alpha=args.grid_l2_alpha,
             grid_rho_max=args.grid_rho_max,
             max_iter=args.max_iter,
             step_mu=args.step_mu,
             step_alpha=args.step_alpha,
-            step_beta=args.step_beta,
+            step_beta=(0.0 if args.freeze_beta else args.step_beta),
+            val_events=val_events,
+            T_val=T_val,
+            beta_grid=args.beta_grid,
+            freeze_beta=args.freeze_beta,
         )
         print("最优: ", report['best'])
         return report
@@ -328,6 +407,10 @@ def main():
     p_gof.add_argument("--exo_standardize", action="store_true", help="对外生特征做标准化")
     p_gof.add_argument("--grad_clip", type=float, default=10.0, help="exo 梯度裁剪阈值")
     p_gof.add_argument("--lr_decay_exo", type=float, default=0.0, help="exo 学习率衰减系数")
+    # 训练/验证窗口与冻结 beta
+    p_gof.add_argument("--split_train", type=float, default=None)
+    p_gof.add_argument("--split_val", type=float, default=None)
+    p_gof.add_argument("--freeze_beta", action="store_true")
 
     def run_gof(args: argparse.Namespace):
         # Lazy import to avoid requiring statsmodels unless GOF is used
@@ -336,6 +419,15 @@ def main():
         events = load_events_json(args.input)
         if args.jitter:
             events = add_jitter_to_events(events, eps=1e-6)
+        # 切分
+        use_split = args.split_train is not None and args.split_val is not None
+        if use_split:
+            if abs(args.split_train + args.split_val - 1.0) > 1e-6:
+                raise ValueError("--split_train 与 --split_val 之和必须为 1.0")
+            train_events, T_train, val_events, T_val = _split_and_shift_events(events, args.T, args.split_train, args.split_val)
+        else:
+            train_events, T_train = events, args.T
+            val_events, T_val = events, args.T
         if args.seasonal_bins and args.seasonal_bins > 0:
             mu0 = estimate_piecewise_mu(events, args.T, args.dim, bins=args.seasonal_bins)
         else:
@@ -343,17 +435,18 @@ def main():
         # 拟合（先得到 alpha/beta 与常数基线 mu 或用于 exo 的初值）
         if args.method == 'map_em':
             res = map_em_exponential(
-                events, T=args.T, dim=args.dim, init_mu=mu0,
+                train_events, T=T_train, dim=args.dim, init_mu=mu0,
                 max_iter=args.max_iter, min_beta=args.min_beta,
                 prior_mu_a=args.prior_mu_a, prior_mu_b=args.prior_mu_b,
                 prior_alpha_a=args.prior_alpha_a, prior_alpha_b=args.prior_alpha_b,
                 prior_beta_a=args.prior_beta_a, prior_beta_b=args.prior_beta_b,
+                update_beta=(not getattr(args, 'freeze_beta', False)),
             )
             mu, alpha, beta = res.mu, res.alpha, res.beta
         else:
             fit = fit_hawkes_exponential(
-                events, T=args.T, dim=args.dim, max_iter=args.max_iter,
-                step_mu=args.step_mu, step_alpha=args.step_alpha, step_beta=args.step_beta,
+                train_events, T=T_train, dim=args.dim, max_iter=args.max_iter,
+                step_mu=args.step_mu, step_alpha=args.step_alpha, step_beta=(0.0 if getattr(args, 'freeze_beta', False) else args.step_beta),
                 min_beta=args.min_beta, l2_alpha=args.l2_alpha, rho_max=args.rho_max,
             )
             mu, alpha, beta = fit.mu, fit.alpha, fit.beta
@@ -363,21 +456,22 @@ def main():
             from workflow.fit.mle_exo import fit_cox_hawkes_theta
             from workflow.models.cox_hawkes import CoxHawkesExponential
             exo = build_proxy_exogenous(
-                events, args.T, args.dim,
+                train_events, T_train, args.dim,
                 window=args.exo_window, standardize=args.exo_standardize,
             )
             theta0 = np.zeros((args.dim, exo.num_features))
             exo_fit = fit_cox_hawkes_theta(
-                events, args.T, args.dim, exo,
+                train_events, T_train, args.dim, exo,
                 alpha=alpha, beta=beta, init_theta=theta0,
                 step=args.exo_step, max_iter=args.exo_max_iter, adam=True,
                 grad_clip=args.grad_clip, lr_decay=args.lr_decay_exo,
             )
-            model = CoxHawkesExponential(exo_fit.theta, alpha, beta, exo)
+            exo_val = build_proxy_exogenous(val_events, T_val, args.dim, window=args.exo_window, standardize=args.exo_standardize)
+            model = CoxHawkesExponential(exo_fit.theta, alpha, beta, exo_val)
         else:
             model = HawkesExponential(mu, alpha, beta)
-        # 残差与GOF
-        resids = model.compensate_residuals(events, args.T)
+        # 残差与GOF（验证窗口）
+        resids = model.compensate_residuals(val_events, T_val)
         ks_exp = ks_exp_test(resids)
         u = compute_uniform_from_residuals(resids)
         ks_uni = ks_uniform_test(u)
