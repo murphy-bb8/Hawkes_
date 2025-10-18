@@ -4,14 +4,14 @@ from typing import List, Optional
 
 
 def _setup_cn():
-    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'DejaVu Sans']
+    plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial', 'Helvetica']
     plt.rcParams['axes.unicode_minus'] = False
 
 
 def plot_adjacency_heatmap(alpha: np.ndarray,
                            labels: Optional[List[str]] = None,
                            threshold: float = 0.0,
-                           title: str = "稀疏传染图（Alpha）",
+                           title: str = "Adjacency (Alpha)",
                            savepath: Optional[str] = None):
     _setup_cn()
     A = np.array(alpha, dtype=float)
@@ -22,14 +22,14 @@ def plot_adjacency_heatmap(alpha: np.ndarray,
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     n = A.shape[0]
     if labels is None:
-        labels = [f"维度{i}" for i in range(n)]
+        labels = [f"dim{i}" for i in range(n)]
     ax.set_xticks(range(n))
     ax.set_yticks(range(n))
     ax.set_xticklabels(labels, rotation=45, ha='right')
     ax.set_yticklabels(labels)
     ax.set_title(title)
-    ax.set_xlabel('来源 j')
-    ax.set_ylabel('目标 i')
+    ax.set_xlabel('source j')
+    ax.set_ylabel('target i')
     plt.tight_layout()
     if savepath:
         plt.savefig(savepath, dpi=150)

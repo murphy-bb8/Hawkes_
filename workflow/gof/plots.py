@@ -4,11 +4,7 @@ from typing import List, Optional
 
 
 def _setup_cn():
-    # 尝试优先使用系统常见中文字体，若不存在自动退回 DejaVu Sans
-    candidates = [
-        'Microsoft YaHei', 'SimHei', 'Noto Sans CJK SC', 'PingFang SC', 'WenQuanYi Zen Hei',
-        'DejaVu Sans'
-    ]
+    candidates = ['DejaVu Sans', 'Arial', 'Helvetica']
     plt.rcParams['font.sans-serif'] = candidates
     plt.rcParams['axes.unicode_minus'] = False
 
@@ -20,9 +16,9 @@ def plot_gof_hist(residuals: List[float], savepath: Optional[str] = None):
     plt.hist(arr, bins=30, density=True, alpha=0.7, color='steelblue', edgecolor='black')
     xs = np.linspace(0, max(arr.max(), 1), 200)
     plt.plot(xs, np.exp(-xs), 'r--', label='Exp(1)')
-    plt.xlabel('补偿残差')
-    plt.ylabel('密度')
-    plt.title('GOF: 残差直方图 vs Exp(1)')
+    plt.xlabel('compensated residuals')
+    plt.ylabel('density')
+    plt.title('GOF: residual histogram vs Exp(1)')
     plt.legend()
     plt.tight_layout()
     if savepath:
@@ -45,9 +41,9 @@ def plot_gof_qq(residuals: List[float], savepath: Optional[str] = None):
     plt.plot(theo, arr, 'o', ms=3)
     m = max(theo.max(), arr.max())
     plt.plot([0, m], [0, m], 'r--', lw=1)
-    plt.xlabel('理论分位（Exp(1)）')
-    plt.ylabel('样本分位（残差）')
-    plt.title('GOF: QQ-plot 对 Exp(1)')
+    plt.xlabel('theoretical quantile (Exp(1))')
+    plt.ylabel('sample quantile (residual)')
+    plt.title('GOF: QQ-plot vs Exp(1)')
     plt.tight_layout()
     if savepath:
         plt.savefig(savepath, dpi=150)

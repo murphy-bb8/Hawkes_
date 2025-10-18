@@ -3,7 +3,6 @@
 本项目提供基于指数核的多维 Hawkes 过程建模与评估的完整工具链，覆盖：仿真、参数估计（MLE / MAP‑EM）、稳定性与正则化、外生因子（Cox×Hawkes）基线、拟合优度（KS/QQ/Ljung‑Box）与可视化。适用于订单流/逐笔成交等不齐次点过程数据的聚集性与互激励分析。
 
 ## 安装
-
 ```bash
 pip install -r requirements.txt
 ```

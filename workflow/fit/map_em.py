@@ -107,38 +107,35 @@ def map_em_exponential(
                 b = beta[i, j]
                 exposure[i, j] = ((1.0 - np.exp(-b * (T - tj))).sum()) / b
 
-        # Iterate events in time to compute responsibilities
-        # Maintain decayed sums per row i, source j: S_ij(t) and also keep individual past contributions for Nij
-        # For Nij, we need expected parent per past event; we compute pointwise probs.
-        # Simpler O(N^2): for each event k, sum over all past events m with mark j
+        # Iterate events in time to compute responsibilities using O(N) recursive updates
+        # Maintain decayed sums S_ij(t) and accumulate responsibilities Nij
+        S = np.zeros((d, d), dtype=float)
+        t_prev = 0.0
+        
         for k in range(n):
             t_k = times[k]
             i_k = types[k]
-            # compute lambda_i(t_k)
-            lam = mu[i_k]
-            # accumulate contributions from parents and compute per-parent probs later
-            parents_idx = []
-            parent_vals = []
-            for m in range(k):
-                j = types[m]
-                dt = t_k - times[m]
-                if dt <= 0:
-                    continue
-                val = alpha[i_k, j] * math.exp(-beta[i_k, j] * dt)
-                if val > 0:
-                    lam += val
-                    parents_idx.append((i_k, j, m))
-                    parent_vals.append(val)
+            
+            # Apply decay to S since last event
+            if k > 0:
+                dt = t_k - t_prev
+                S = S * np.exp(-beta * dt)
+            
+            # Compute intensity at current event
+            lam = mu[i_k] + float((alpha[i_k, :] * S[i_k, :]).sum())
             lam = max(lam, 1e-300)
-            # immigrant resp
+            
+            # Compute responsibilities
             z0[k] = mu[i_k] / lam
-            # offspring resp per parent
-            if parent_vals:
-                parent_vals = np.asarray(parent_vals, dtype=float)
-                probs = parent_vals / lam
-                for p, pr in zip(parents_idx, probs):
-                    i_row, j_col, _ = p
-                    Nij[i_row, j_col] += pr
+            
+            # Accumulate offspring responsibilities (expected counts)
+            if lam > mu[i_k]:
+                for j in range(d):
+                    Nij[i_k, j] += alpha[i_k, j] * S[i_k, j] / lam
+            
+            # Update S for next iteration
+            S[:, i_k] += 1.0
+            t_prev = t_k
 
         # M-step: MAP updates using Gamma(a,b) priors (mode (a+count-1)/(b+exposure))
         # mu_i

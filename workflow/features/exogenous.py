@@ -92,9 +92,16 @@ class ExogenousDesign:
             return x
         left = int(np.searchsorted(self.breakpoints, a, side="right") - 1)
         right = int(np.searchsorted(self.breakpoints, b, side="right") - 1)
+        # Clamp indices to valid segment range [0, num_segments-1]
+        n_seg = self.num_segments
+        if n_seg <= 0:
+            return 0.0
+        left = max(0, min(left, n_seg - 1))
+        right = max(0, min(right, n_seg - 1))
         total = 0.0
         for m in range(left, right + 1):
             seg_start = max(a, float(self.breakpoints[m]))
+            # m+1 is safe since m <= n_seg-1 and breakpoints has length n_seg+1
             seg_end = min(b, float(self.breakpoints[m + 1]))
             dt = seg_end - seg_start
             if dt <= 0:
@@ -203,4 +210,29 @@ def with_intercept(exo: ExogenousDesign, value: float = 1.0) -> ExogenousDesign:
         out.std_ = np.array([1.0] + [1.0] * feats.shape[1], dtype=float)
     return out
 
+
+# ---- Time-based exogenous builders ----
+def build_time_exogenous(T: float, step: float = 1.0, period: float = 60.0,
+                         components: Sequence[str] = ("sin", "cos")) -> ExogenousDesign:
+    """
+    Build piecewise-constant time exogenous features on a regular grid.
+    - components can include 'sin' and/or 'cos'.
+    - No intercept is included; use with_intercept afterwards.
+    """
+    t_grid = np.arange(0.0, T + 1e-12, step, dtype=float)
+    if t_grid[-1] < T:
+        t_grid = np.append(t_grid, T)
+    centers = 0.5 * (t_grid[:-1] + t_grid[1:])
+    cols = []
+    for c in components:
+        if c == 'sin':
+            cols.append(np.sin(2.0 * np.pi * centers / max(period, 1e-8)))
+        elif c == 'cos':
+            cols.append(np.cos(2.0 * np.pi * centers / max(period, 1e-8)))
+        else:
+            raise ValueError(f"Unknown time component: {c}")
+    if not cols:
+        cols.append(np.ones_like(centers))
+    X = np.vstack(cols).T.astype(float)  # (M, K)
+    return ExogenousDesign(breakpoints=t_grid.astype(float), features=X)
 

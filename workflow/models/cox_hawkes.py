@@ -103,4 +103,48 @@ class CoxHawkesExponential:
             t_prev = t
         return resids
 
+    def simulate_ogata(self, T: float, max_jumps: int = 1_000_000, seed: Optional[int] = None) -> List[Tuple[float, int]]:
+        """Simulate Cox×Hawkes with time-varying baseline exp(theta^T X(t)).
+        Uses thinning with an adaptive upper bound from exp(theta^T X(t)).
+        """
+        if seed is not None:
+            rng = np.random.default_rng(seed)
+        else:
+            rng = np.random.default_rng()
+
+        events: List[Tuple[float, int]] = []
+        t = 0.0
+        S = np.zeros_like(self.alpha)
+        while t < T and len(events) < max_jumps:
+            # conservative upper bound per dim
+            # baseline upper bound over small interval: use current value as proxy
+            base_now = np.array([math.exp(float(self.theta[i] @ self.exo.value_at(t))) for i in range(self.dim)], dtype=float)
+            lam_vec = base_now + (self.alpha * S).sum(axis=1)
+            lam_vec = np.clip(lam_vec, 0.0, np.inf)
+            lam_bar = float(lam_vec.sum())
+            if lam_bar <= 0:
+                break
+            w = rng.exponential(1.0 / lam_bar)
+            t_candidate = t + w
+            if t_candidate > T:
+                break
+            dt = t_candidate - t
+            S = S * np.exp(-self.beta * dt)
+            base_cand = np.array([math.exp(float(self.theta[i] @ self.exo.value_at(t_candidate))) for i in range(self.dim)], dtype=float)
+            lam_vec = base_cand + (self.alpha * S).sum(axis=1)
+            lam_vec = np.clip(lam_vec, 0.0, np.inf)
+            lam_sum = float(lam_vec.sum())
+            if rng.uniform() <= (lam_sum / lam_bar if lam_bar > 0 else 0.0):
+                if lam_sum <= 0:
+                    t = t_candidate
+                    continue
+                probs = lam_vec / lam_sum
+                i = int(rng.choice(self.dim, p=probs))
+                events.append((t_candidate, i))
+                S[:, i] += 1.0
+                t = t_candidate
+            else:
+                t = t_candidate
+        return events
+
 
